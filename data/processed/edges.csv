@@ -1,4 +1,4 @@
-﻿from_site,to_site,strainght_ distance_km,travel_distance_km,base_time_min,movement_id
+﻿from_site,to_site,straight_distance_km,travel_distance_km,base_time_min,movement_id
 2820,4321,1.77,3.7,4,2820_2
 2820,3662,1.59,1.87,2,2820_1
 3662,3002,0.6,1.03,1,3662_3
@@ -22,14 +22,3 @@
 4057,3127,2.23,2.41,2,4057_3
 3127,3682,2.22,3.41,4,3127_2
 3682,2000,1.57,1.73,1,3682_3
-,,,,,
-,,,,,
-,,,,,
-,,,,,
-,,,,,
-,,,,,
-,,,,,
-,,,,,
-,,,,,
-,,,,,
-,,,,s,
