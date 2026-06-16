@@ -1,6 +1,7 @@
 # visualize.py
 # This script loads map.txt and cos30019_2b.geojson, stitches a live CartoDB Voyager map,
 # and displays the street network with curved routes and A* pathfinding in Pygame.
+# Features: Responsive full-screen toggling, traffic flow animations, and a modern dashboard.
 # Usage: python visualize.py
 
 import pygame
@@ -13,7 +14,7 @@ import io
 from PIL import Image
 from src.routing.a_star import a_star_search
 
-# Hardcoded fallback pixel coordinates for offline mode (static map.png)
+# Fallback pixel coordinates for offline mode (static map.png)
 FALLBACK_PIXELS = {
     2000: (415, 421),
     2820: (129, 98),
@@ -36,28 +37,31 @@ FALLBACK_PIXELS = {
 }
 
 # Color palette
-COLOR_BG = (18, 18, 18)
-COLOR_PANEL_BG = (30, 30, 35)
-COLOR_TEXT_PRIMARY = (240, 240, 240)
-COLOR_TEXT_SECONDARY = (180, 180, 180)
-COLOR_ACCENT = (0, 229, 255) # Cyan
-COLOR_SOURCE = (57, 255, 20) # Bright Lime Green
-COLOR_DEST = (255, 7, 58) # Neon Red
-COLOR_PATH = (255, 207, 0) # Gold
-COLOR_EDGE = (100, 100, 100)
-COLOR_NODE = (80, 80, 80)
+COLOR_BG = (10, 10, 12)
+COLOR_PANEL_BG = (22, 22, 26)
+COLOR_CARD_BG = (32, 32, 40)
+COLOR_TEXT_PRIMARY = (245, 245, 250)
+COLOR_TEXT_SECONDARY = (160, 160, 175)
+COLOR_ACCENT = (0, 229, 255)      # Cyan Glow
+COLOR_SOURCE = (57, 255, 20)      # Neon Lime Green
+COLOR_DEST = (255, 7, 58)         # Neon Red
+COLOR_PATH = (255, 215, 0)        # Gold/Yellow
+COLOR_EDGE = (70, 70, 85)
+COLOR_NODE = (100, 100, 120)
 COLOR_HOVER = (255, 255, 255)
+COLOR_GLOW_SOURCE = (57, 255, 20, 40)
+COLOR_GLOW_DEST = (255, 7, 58, 40)
 
 class GraphNode:
     def __init__(self, node_id, lat, lng):
         self.id = node_id
-        self.lat = lat # dataset average lat (for A* heuristic)
-        self.lng = lng # dataset average lng (for A* heuristic)
-        self.neighbors = [] # list of (neighbor_id, cost)
+        self.lat = lat
+        self.lng = lng
+        self.neighbors = []
 
 class MapGraph:
     def __init__(self):
-        self.nodes = {} # node_id -> GraphNode
+        self.nodes = {}
 
 def load_map_txt(file_path="map.txt"):
     if not os.path.exists(file_path):
@@ -65,7 +69,6 @@ def load_map_txt(file_path="map.txt"):
         sys.exit(1)
         
     graph = MapGraph()
-    
     with open(file_path, "r") as f:
         lines = [line.strip() for line in f if line.strip()]
         
@@ -76,26 +79,21 @@ def load_map_txt(file_path="map.txt"):
     start_node = int(lines[0])
     dest_node = int(lines[1])
     
-    # Parse nodes and edges
     for line in lines[2:]:
         if ":" in line:
-            # Parse Node: id:(lat,lng)
             parts = line.split(":")
             nid = int(parts[0])
             coords_str = parts[1].replace("(", "").replace(")", "")
             lat_str, lng_str = coords_str.split(",")
             graph.nodes[nid] = GraphNode(nid, float(lat_str), float(lng_str))
         elif "," in line:
-            # Parse Edge: u,v,cost
             parts = line.split(",")
             u = int(parts[0])
             v = int(parts[1])
             cost = float(parts[2])
             if u in graph.nodes and v in graph.nodes:
-                # Add u -> v if not already present
                 if not any(n[0] == v for n in graph.nodes[u].neighbors):
                     graph.nodes[u].neighbors.append((v, cost))
-                # Add v -> u if not already present
                 if not any(n[0] == u for n in graph.nodes[v].neighbors):
                     graph.nodes[v].neighbors.append((u, cost))
                 
@@ -110,7 +108,6 @@ def save_map_txt(graph, start_node, dest_node, file_path="map.txt"):
                 node = graph.nodes[nid]
                 f.write(f"{node.id}:({node.lat:.6f},{node.lng:.6f})\n")
             
-            # Write edges
             edges_written = set()
             for u in sorted(graph.nodes.keys()):
                 node = graph.nodes[u]
@@ -122,14 +119,11 @@ def save_map_txt(graph, start_node, dest_node, file_path="map.txt"):
         print(f"Warning: Failed to save changes back to map.txt: {e}")
 
 def load_geojson_data(file_path="cos30019_2b.geojson"):
-    """
-    Loads precise coordinates of visual nodes and shape polylines of curved routes.
-    """
     visual_coords = {}
     curved_edges = {}
     
     if not os.path.exists(file_path):
-        print(f"Warning: {file_path} not found. Visual coords and curved lines will fall back.")
+        print(f"Warning: {file_path} not found. Falling back to offline coords.")
         return visual_coords, curved_edges
         
     try:
@@ -157,10 +151,9 @@ def load_geojson_data(file_path="cos30019_2b.geojson"):
                 if len(parts) == 2:
                     try:
                         u, v = int(parts[0]), int(parts[1])
-                        # Convert [lng, lat] list to [(lat, lng), ...]
                         coords = [(lat, lng) for lng, lat in geom["coordinates"]]
                         curved_edges[(u, v)] = coords
-                        curved_edges[(v, u)] = coords[::-1] # Reverse coordinates for opposite direction
+                        curved_edges[(v, u)] = coords[::-1]
                     except ValueError:
                         pass
     except Exception as e:
@@ -168,7 +161,6 @@ def load_geojson_data(file_path="cos30019_2b.geojson"):
         
     return visual_coords, curved_edges
 
-# Helper functions for OSM Mercator projection
 def latlng_to_tile_float(lat, lng, zoom):
     lat_rad = math.radians(lat)
     n = 2.0 ** zoom
@@ -177,17 +169,12 @@ def latlng_to_tile_float(lat, lng, zoom):
     return x, y
 
 def get_live_osm_map(visual_coords, zoom=15):
-    """
-    Downloads CartoDB Voyager tiles for the bounding box of the visual coordinates,
-    stitches them, and saves as osm_map.png. Returns coordinates parameters if successful.
-    """
     if not visual_coords:
         return None
         
     lats = [c[0] for c in visual_coords.values()]
     lngs = [c[1] for c in visual_coords.values()]
     
-    # Add padding boundaries
     min_lat, max_lat = min(lats) - 0.003, max(lats) + 0.003
     min_lng, max_lng = min(lngs) - 0.003, max(lngs) + 0.003
     
@@ -200,7 +187,7 @@ def get_live_osm_map(visual_coords, zoom=15):
     num_cols = max_xtile - min_xtile + 1
     num_rows = max_ytile - min_ytile + 1
     
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
     
     if os.path.exists("osm_map.png"):
         return min_xtile, min_ytile, num_cols, num_rows
@@ -239,66 +226,24 @@ def main():
     pygame.init()
     pygame.font.init()
     
-    try:
-        font_title = pygame.font.SysFont("Helvetica", 24, bold=True)
-        font_header = pygame.font.SysFont("Helvetica", 18, bold=True)
-        font_body = pygame.font.SysFont("Helvetica", 14)
-        font_small = pygame.font.SysFont("Helvetica", 11)
-    except:
-        font_title = pygame.font.Font(None, 28)
-        font_header = pygame.font.Font(None, 22)
-        font_body = pygame.font.Font(None, 16)
-        font_small = pygame.font.Font(None, 13)
-
-    # Visual mode flags
+    # Visual mode configuration
     zoom = 15
     osm_params = get_live_osm_map(visual_coords, zoom)
     
-    if osm_params:
-        # Live OSM configuration
-        min_xtile, min_ytile, num_cols, num_rows = osm_params
-        orig_map_w = num_cols * 256
-        orig_map_h = num_rows * 256
-        map_w, map_h = 600, 500 # Display map box
-        scale_x = map_w / orig_map_w
-        scale_y = map_h / orig_map_h
-        
-        # Project visual coordinates to screen pixels
-        node_pixels = {}
-        for nid, (lat, lng) in visual_coords.items():
-            xf, yf = latlng_to_tile_float(lat, lng, zoom)
-            px = (xf - min_xtile) * 256
-            py = (yf - min_ytile) * 256
-            node_pixels[nid] = (int(px * scale_x), int(py * scale_y))
-            
-        map_file_name = "osm_map.png"
-    else:
-        # Fallback to offline static map
-        print("Failed to download live OSM map. Falling back to offline map.png.")
-        map_w, map_h = 479, 447
-        node_pixels = FALLBACK_PIXELS
-        map_file_name = "map.png"
-        
-    panel_w = 321
-    window_w = map_w + panel_w
-    window_h = 500
-    
-    try:
-        screen = pygame.display.set_mode((window_w, window_h))
-    except pygame.error as e:
-        print(f"Warning: Could not launch Pygame GUI window (no display available): {e}")
-        print("Note: 'map.txt' contents remain unchanged.")
-        return
-        
+    # Set window to be resizable
+    window_w, window_h = 1100, 750
+    screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE)
     pygame.display.set_caption("TBRGS Map Visualizer (OpenStreetMap)")
     clock = pygame.time.Clock()
     
-    # Load background map
-    map_image = None
+    is_fullscreen = False
+    
+    # Load raw map background image
+    raw_map_image = None
+    map_file_name = "osm_map.png" if osm_params else "map.png"
     if os.path.exists(map_file_name):
         try:
-            map_image = pygame.image.load(map_file_name).convert()
-            map_image = pygame.transform.scale(map_image, (map_w, map_h))
+            raw_map_image = pygame.image.load(map_file_name).convert()
         except Exception as e:
             print(f"Error loading map background: {e}")
             
@@ -307,16 +252,92 @@ def main():
     current_path = None
     current_travel_time = 0.0
     
+    # Particle animation settings for traffic flow
+    particles = []
+    particle_timer = 0
+    
     def update_route():
         nonlocal current_path, current_travel_time
         current_path, current_travel_time = a_star_search(graph, current_start, current_dest)
-        # Save updated source/destination back to map.txt
         save_map_txt(graph, current_start, current_dest)
-
+        
     update_route()
     
     running = True
     while running:
+        # Get active dimensions dynamically (supports resizing and fullscreen)
+        w_w, w_h = screen.get_size()
+        panel_w = int(w_w * 0.3)
+        if panel_w < 300:
+            panel_w = 300
+        elif panel_w > 400:
+            panel_w = 400
+            
+        map_w = w_w - panel_w
+        map_h = w_h
+        
+        # Load fonts scaled to height/width
+        font_size_body = max(13, int(w_h * 0.02))
+        font_size_title = max(20, int(w_h * 0.032))
+        font_size_header = max(16, int(w_h * 0.024))
+        
+        try:
+            font_title = pygame.font.SysFont("Helvetica", font_size_title, bold=True)
+            font_header = pygame.font.SysFont("Helvetica", font_size_header, bold=True)
+            font_body = pygame.font.SysFont("Helvetica", font_size_body)
+            font_small = pygame.font.SysFont("Helvetica", max(11, int(w_h * 0.016)))
+        except:
+            font_title = pygame.font.Font(None, font_size_title + 4)
+            font_header = pygame.font.Font(None, font_size_header + 4)
+            font_body = pygame.font.Font(None, font_size_body + 2)
+            font_small = pygame.font.Font(None, max(11, int(w_h * 0.016)))
+            
+        # Scale backgrounds and coordinates dynamically
+        if osm_params:
+            min_xtile, min_ytile, num_cols, num_rows = osm_params
+            orig_map_w = num_cols * 256
+            orig_map_h = num_rows * 256
+            scale_x = map_w / orig_map_w
+            scale_y = map_h / orig_map_h
+            
+            # Recalculate node pixels based on current window size
+            node_pixels = {}
+            for nid, (lat, lng) in visual_coords.items():
+                xf, yf = latlng_to_tile_float(lat, lng, zoom)
+                px = (xf - min_xtile) * 256
+                py = (yf - min_ytile) * 256
+                node_pixels[nid] = (int(px * scale_x), int(py * scale_y))
+        else:
+            # Fallback to static layout scaled
+            scale_x = map_w / 479.0
+            scale_y = map_h / 447.0
+            node_pixels = {nid: (int(x * scale_x), int(y * scale_y)) for nid, (x, y) in FALLBACK_PIXELS.items()}
+            
+        # 1. Update Traffic Particles
+        particle_timer += 1
+        if current_path and len(current_path) >= 2:
+            # Spawn a new particle occasionally
+            if particle_timer % 15 == 0:
+                particles.append({
+                    "segment": 0,    # Index in path
+                    "progress": 0.0, # Progress along current segment (0.0 to 1.0)
+                    "speed": 0.03    # Speed factor
+                })
+                
+            # Update active particles
+            active_particles = []
+            for p in particles:
+                p["progress"] += p["speed"]
+                if p["progress"] >= 1.0:
+                    p["progress"] = 0.0
+                    p["segment"] += 1
+                if p["segment"] < len(current_path) - 1:
+                    active_particles.append(p)
+            particles = active_particles
+        else:
+            particles = []
+            
+        # Event Processing
         mouse_pos = pygame.mouse.get_pos()
         hovered_node = None
         hovered_edge = None
@@ -324,13 +345,13 @@ def main():
         # Check node hovers
         for node_id, (px, py) in node_pixels.items():
             dist = math.hypot(mouse_pos[0] - px, mouse_pos[1] - py)
-            if dist <= 12:
+            if dist <= 14:
                 hovered_node = node_id
                 break
                 
         # Check edge hovers if not hovering over a node
         if hovered_node is None and mouse_pos[0] < map_w and mouse_pos[1] < map_h:
-            min_dist_to_edge = 8.0
+            min_dist_to_edge = 10.0
             for node_id, node in graph.nodes.items():
                 p1 = node_pixels.get(node_id)
                 if not p1: continue
@@ -338,7 +359,6 @@ def main():
                     p2 = node_pixels.get(neighbor_id)
                     if not p2: continue
                     
-                    # If curved path exists, check distance along segments
                     coords = curved_edges.get((node_id, neighbor_id))
                     if coords and osm_params:
                         points = []
@@ -348,7 +368,6 @@ def main():
                             py = (yf - min_ytile) * 256
                             points.append((int(px * scale_x), int(py * scale_y)))
                             
-                        # Check distance to each segment in the polyline
                         for i in range(len(points) - 1):
                             x1, y1 = points[i]
                             x2, y2 = points[i+1]
@@ -363,7 +382,6 @@ def main():
                                 min_dist_to_edge = d
                                 hovered_edge = (node_id, neighbor_id, cost)
                     else:
-                        # Fallback to straight line segment hover check
                         x0, y0 = mouse_pos
                         x1, y1 = p1
                         x2, y2 = p2
@@ -376,10 +394,13 @@ def main():
                         if d < min_dist_to_edge:
                             min_dist_to_edge = d
                             hovered_edge = (node_id, neighbor_id, cost)
-                        
+                            
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.VIDEORESIZE:
+                # Screen size updated dynamically, handled at start of loop
+                pass
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if hovered_node is not None:
                     if event.button == 1: # Left click
@@ -388,16 +409,25 @@ def main():
                     elif event.button == 3: # Right click
                         current_dest = hovered_node
                         update_route()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_f or event.key == pygame.K_F11:
+                    # Toggle Full Screen Mode
+                    is_fullscreen = not is_fullscreen
+                    if is_fullscreen:
+                        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+                    else:
+                        screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE)
                         
         screen.fill(COLOR_BG)
         
-        # Draw map background
-        if map_image:
-            screen.blit(map_image, (0, 0))
+        # 2. Render Scaled Background Map
+        if raw_map_image:
+            scaled_map = pygame.transform.smoothscale(raw_map_image, (map_w, map_h))
+            screen.blit(scaled_map, (0, 0))
         else:
-            pygame.draw.rect(screen, (40, 40, 40), (0, 0, map_w, map_h))
+            pygame.draw.rect(screen, (30, 30, 35), (0, 0, map_w, map_h))
             
-        # Draw edges
+        # Draw Network Edges
         drawn_edges = set()
         for node_id, node in graph.nodes.items():
             p1 = node_pixels.get(node_id)
@@ -410,7 +440,7 @@ def main():
                 p2 = node_pixels.get(neighbor_id)
                 if not p2: continue
                 
-                # Check path
+                # Check path inclusion
                 is_in_path = False
                 if current_path:
                     for idx in range(len(current_path) - 1):
@@ -420,9 +450,8 @@ def main():
                             break
                             
                 color = COLOR_PATH if is_in_path else COLOR_EDGE
-                thickness = 5 if is_in_path else 2
+                thickness = 6 if is_in_path else 2
                 
-                # Check if we have curved coordinate list for the edge, draw it
                 coords = curved_edges.get((node_id, neighbor_id))
                 if coords and osm_params:
                     points = []
@@ -432,73 +461,140 @@ def main():
                         py = (yf - min_ytile) * 256
                         points.append((int(px * scale_x), int(py * scale_y)))
                     if len(points) >= 2:
+                        # Draw soft glow behind active paths
+                        if is_in_path:
+                            pygame.draw.lines(screen, (255, 160, 0), False, points, thickness + 4)
                         pygame.draw.lines(screen, color, False, points, thickness)
                 else:
-                    # Draw straight line
+                    if is_in_path:
+                        pygame.draw.line(screen, (255, 160, 0), p1, p2, thickness + 4)
                     pygame.draw.line(screen, color, p1, p2, thickness)
                     
-        # Draw Nodes
-        for node_id, (px, py) in node_pixels.items():
-            if node_id not in graph.nodes:
-                continue
+        # 3. Draw Moving Traffic Particles
+        for p in particles:
+            seg_idx = p["segment"]
+            progress = p["progress"]
+            u_id = current_path[seg_idx]
+            v_id = current_path[seg_idx+1]
+            
+            coords = curved_edges.get((u_id, v_id))
+            if coords and osm_params:
+                # Interpolate along polyline segments
+                points = []
+                for lat, lng in coords:
+                    xf, yf = latlng_to_tile_float(lat, lng, zoom)
+                    px = (xf - min_xtile) * 256
+                    py = (yf - min_ytile) * 256
+                    points.append((int(px * scale_x), int(py * scale_y)))
                 
+                # Find interpolation point along polyline
+                num_pts = len(points)
+                if num_pts >= 2:
+                    total_progress = progress * (num_pts - 1)
+                    idx = int(total_progress)
+                    t_val = total_progress - idx
+                    x1, y1 = points[idx]
+                    x2, y2 = points[idx+1]
+                    part_x = x1 + t_val * (x2 - x1)
+                    part_y = y1 + t_val * (y2 - y1)
+                else:
+                    continue
+            else:
+                # Fallback to straight line interpolation
+                p1 = node_pixels[u_id]
+                p2 = node_pixels[v_id]
+                part_x = p1[0] + progress * (p2[0] - p1[0])
+                part_y = p1[1] + progress * (p2[1] - p1[1])
+                
+            pygame.draw.circle(screen, (255, 255, 255), (int(part_x), int(part_y)), 4)
+            pygame.draw.circle(screen, COLOR_ACCENT, (int(part_x), int(part_y)), 7, 1)
+
+        # 4. Draw Intersections/Nodes
+        for node_id, (px, py) in node_pixels.items():
+            if node_id not in graph.nodes: continue
+            
             if node_id == current_start:
                 color = COLOR_SOURCE
-                radius = 9
+                radius = 11
+                # Halos
+                pygame.draw.circle(screen, (57, 255, 20, 60), (px, py), radius + 8, 2)
             elif node_id == current_dest:
                 color = COLOR_DEST
-                radius = 9
+                radius = 11
+                # Halos
+                pygame.draw.circle(screen, (255, 7, 58, 60), (px, py), radius + 8, 2)
             elif current_path and node_id in current_path:
                 color = COLOR_PATH
-                radius = 7
+                radius = 8
             else:
                 color = COLOR_NODE
-                radius = 5
+                radius = 6
                 
             if node_id == hovered_node:
                 pygame.draw.circle(screen, COLOR_HOVER, (px, py), radius + 3, 2)
                 
             pygame.draw.circle(screen, color, (px, py), radius)
             
+            # ID labels
             lbl = font_small.render(str(node_id), True, COLOR_TEXT_PRIMARY)
-            screen.blit(lbl, (px + 10, py - 6))
+            screen.blit(lbl, (px + 12, py - 7))
             
-        # Side Panel
-        panel_rect = pygame.Rect(map_w, 0, panel_w, window_h)
+        # 5. Render Glassmorphism Side Panel
+        panel_rect = pygame.Rect(map_w, 0, panel_w, w_h)
         pygame.draw.rect(screen, COLOR_PANEL_BG, panel_rect)
-        pygame.draw.line(screen, COLOR_NODE, (map_w, 0), (map_w, window_h), 2)
+        pygame.draw.line(screen, (60, 60, 75), (map_w, 0), (map_w, w_h), 2)
         
-        y_offset = 20
-        title_surf = font_title.render("TBRGS Map Viewer", True, COLOR_ACCENT)
+        y_offset = int(w_h * 0.03)
+        
+        # Navigation Title Header
+        title_surf = font_title.render("TBRGS NAVIGATOR", True, COLOR_ACCENT)
         screen.blit(title_surf, (map_w + 20, y_offset))
-        y_offset += 45
+        y_offset += int(w_h * 0.07)
         
-        orig_lbl = font_body.render(f"Source Node: {current_start}", True, COLOR_TEXT_PRIMARY)
-        dest_lbl = font_body.render(f"Dest Node: {current_dest}", True, COLOR_TEXT_PRIMARY)
-        screen.blit(orig_lbl, (map_w + 20, y_offset))
-        y_offset += 20
-        screen.blit(dest_lbl, (map_w + 20, y_offset))
-        y_offset += 35
+        # Source/Destination Card
+        card_rect = pygame.Rect(map_w + 15, y_offset, panel_w - 30, int(w_h * 0.16))
+        pygame.draw.rect(screen, COLOR_CARD_BG, card_rect, border_radius=8)
+        pygame.draw.rect(screen, (60, 60, 75), card_rect, 1, border_radius=8)
         
-        res_header = font_header.render("A* Route Result", True, COLOR_ACCENT)
-        screen.blit(res_header, (map_w + 20, y_offset))
-        y_offset += 25
+        lbl_s = font_body.render(f"Source ID : {current_start}", True, COLOR_SOURCE)
+        lbl_d = font_body.render(f"Dest ID   : {current_dest}", True, COLOR_DEST)
+        screen.blit(lbl_s, (map_w + 30, y_offset + 15))
+        screen.blit(lbl_d, (map_w + 30, y_offset + 15 + int(w_h * 0.04)))
+        
+        # Instructions / Coordinates in card
+        if current_start in visual_coords:
+            c_lat, c_lng = visual_coords[current_start]
+            lbl_coords = font_small.render(f"Lat: {c_lat:.5f}, Lng: {c_lng:.5f}", True, COLOR_TEXT_SECONDARY)
+            screen.blit(lbl_coords, (map_w + 30, y_offset + 15 + int(w_h * 0.08)))
+            
+        y_offset += int(w_h * 0.19)
+        
+        # Route Statistics Card
+        stats_header = font_header.render("Route Analytics", True, COLOR_ACCENT)
+        screen.blit(stats_header, (map_w + 20, y_offset))
+        y_offset += int(w_h * 0.04)
+        
+        card_stats = pygame.Rect(map_w + 15, y_offset, panel_w - 30, int(w_h * 0.28))
+        pygame.draw.rect(screen, COLOR_CARD_BG, card_stats, border_radius=8)
+        pygame.draw.rect(screen, (60, 60, 75), card_stats, 1, border_radius=8)
         
         if current_path:
             mins = int(current_travel_time // 60)
             secs = int(current_travel_time % 60)
-            time_result = font_body.render(f"Travel Time: {mins} min {secs} s", True, COLOR_SOURCE)
-            screen.blit(time_result, (map_w + 20, y_offset))
-            y_offset += 25
+            time_result = font_body.render(f"Est. Travel Time: {mins} min {secs} s", True, COLOR_SOURCE)
+            nodes_count = font_body.render(f"Intersections: {len(current_path)} nodes", True, COLOR_TEXT_PRIMARY)
             
-            # Draw path string
+            screen.blit(time_result, (map_w + 30, y_offset + 15))
+            screen.blit(nodes_count, (map_w + 30, y_offset + 15 + int(w_h * 0.04)))
+            
+            # Format route node list to wrap beautifully inside the card
             path_str = " -> ".join(map(str, current_path))
             words = path_str.split(" -> ")
             lines = []
             curr_line = ""
             for word in words:
                 test_line = curr_line + (" -> " if curr_line else "") + word
-                if font_body.size(test_line)[0] < panel_w - 40:
+                if font_small.size(test_line)[0] < panel_w - 60:
                     curr_line = test_line
                 else:
                     lines.append(curr_line)
@@ -506,51 +602,55 @@ def main():
             if curr_line:
                 lines.append(curr_line)
                 
-            for idx, line in enumerate(lines[:4]):
-                line_surf = font_body.render(line, True, COLOR_TEXT_PRIMARY)
-                screen.blit(line_surf, (map_w + 20, y_offset))
-                y_offset += 20
+            path_y = y_offset + 15 + int(w_h * 0.09)
+            for idx, line in enumerate(lines[:5]):
+                line_surf = font_small.render(line, True, COLOR_TEXT_SECONDARY)
+                screen.blit(line_surf, (map_w + 30, path_y))
+                path_y += int(w_h * 0.03)
         else:
             no_path = font_body.render("No path exists!", True, COLOR_DEST)
-            screen.blit(no_path, (map_w + 20, y_offset))
-            y_offset += 20
+            screen.blit(no_path, (map_w + 30, y_offset + 15))
             
-        # Controls panel
-        y_offset = 360
-        help_header = font_header.render("Controls", True, COLOR_TEXT_SECONDARY)
+        y_offset += int(w_h * 0.31)
+        
+        # Interactive Controls Reference
+        help_header = font_header.render("Controls Menu", True, COLOR_TEXT_SECONDARY)
         screen.blit(help_header, (map_w + 20, y_offset))
-        y_offset += 25
+        y_offset += int(w_h * 0.04)
         
         helps = [
             "Left-Click node : Set Source",
             "Right-Click node: Set Destination",
-            "Saves start/dest back to map.txt"
+            "F / F11 key      : Toggle Full Screen Mode",
+            "Node details save directly to map.txt"
         ]
         for h_text in helps:
-            help_surf = font_body.render(h_text, True, COLOR_TEXT_SECONDARY)
+            help_surf = font_small.render(h_text, True, COLOR_TEXT_SECONDARY)
             screen.blit(help_surf, (map_w + 20, y_offset))
-            y_offset += 20
+            y_offset += int(w_h * 0.03)
             
-        # Tooltips
+        # 6. Render Overlay Tooltips
         if hovered_node is not None and hovered_node in visual_coords:
             v_lat, v_lng = visual_coords[hovered_node]
-            tooltip_rect = pygame.Rect(mouse_pos[0] + 15, mouse_pos[1] - 35, 180, 50)
-            pygame.draw.rect(screen, (20, 20, 20), tooltip_rect)
-            pygame.draw.rect(screen, COLOR_ACCENT, tooltip_rect, 1)
-            t1 = font_small.render(f"Intersection: {hovered_node}", True, COLOR_TEXT_PRIMARY)
-            t2 = font_small.render(f"Lat: {v_lat:.5f}, Lng: {v_lng:.5f}", True, COLOR_TEXT_SECONDARY)
-            screen.blit(t1, (mouse_pos[0] + 20, mouse_pos[1] - 30))
-            screen.blit(t2, (mouse_pos[0] + 20, mouse_pos[1] - 15))
+            tooltip_rect = pygame.Rect(mouse_pos[0] + 15, mouse_pos[1] - 40, 200, 56)
+            pygame.draw.rect(screen, (15, 15, 20), tooltip_rect, border_radius=4)
+            pygame.draw.rect(screen, COLOR_ACCENT, tooltip_rect, 1, border_radius=4)
+            t1 = font_small.render(f"Intersection ID: {hovered_node}", True, COLOR_TEXT_PRIMARY)
+            t2 = font_small.render(f"Lat: {v_lat:.6f}", True, COLOR_TEXT_SECONDARY)
+            t3 = font_small.render(f"Lng: {v_lng:.6f}", True, COLOR_TEXT_SECONDARY)
+            screen.blit(t1, (mouse_pos[0] + 25, mouse_pos[1] - 35))
+            screen.blit(t2, (mouse_pos[0] + 25, mouse_pos[1] - 21))
+            screen.blit(t3, (mouse_pos[0] + 25, mouse_pos[1] - 9))
             
         elif hovered_edge is not None:
             u, v, cost = hovered_edge
-            tooltip_rect = pygame.Rect(mouse_pos[0] + 15, mouse_pos[1] - 30, 180, 45)
-            pygame.draw.rect(screen, (20, 20, 20), tooltip_rect)
-            pygame.draw.rect(screen, COLOR_ACCENT, tooltip_rect, 1)
-            t1 = font_small.render(f"Link: {u} -> {v}", True, COLOR_TEXT_PRIMARY)
-            t2 = font_small.render(f"Cost: {int(round(cost))} seconds", True, COLOR_TEXT_SECONDARY)
-            screen.blit(t1, (mouse_pos[0] + 20, mouse_pos[1] - 25))
-            screen.blit(t2, (mouse_pos[0] + 20, mouse_pos[1] - 13))
+            tooltip_rect = pygame.Rect(mouse_pos[0] + 15, mouse_pos[1] - 30, 180, 48)
+            pygame.draw.rect(screen, (15, 15, 20), tooltip_rect, border_radius=4)
+            pygame.draw.rect(screen, COLOR_ACCENT, tooltip_rect, 1, border_radius=4)
+            t1 = font_small.render(f"Segment: {u} -> {v}", True, COLOR_TEXT_PRIMARY)
+            t2 = font_small.render(f"Travel Time: {int(round(cost))} seconds", True, COLOR_TEXT_SECONDARY)
+            screen.blit(t1, (mouse_pos[0] + 25, mouse_pos[1] - 25))
+            screen.blit(t2, (mouse_pos[0] + 25, mouse_pos[1] - 12))
 
         pygame.display.flip()
         clock.tick(30)
