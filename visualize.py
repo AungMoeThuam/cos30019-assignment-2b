@@ -207,6 +207,33 @@ def get_congestion_color(cost, distance):
         
     return (r, g, b)
 
+def get_route_gradient_color(index, total):
+    """
+    Interpolates active route color from Green -> Yellow -> Red based on path index.
+    """
+    if total <= 1:
+        return (57, 255, 20)  # Green fallback
+    t = index / (total - 1)
+    
+    c_green = (57, 255, 20)
+    c_yellow = (255, 215, 0)
+    c_red = (255, 7, 58)
+    
+    if t < 0.5:
+        # Green to Yellow
+        factor = t / 0.5
+        r = int(c_green[0] + factor * (c_yellow[0] - c_green[0]))
+        g = int(c_green[1] + factor * (c_yellow[1] - c_green[1]))
+        b = int(c_green[2] + factor * (c_yellow[2] - c_green[2]))
+    else:
+        # Yellow to Red
+        factor = (t - 0.5) / 0.5
+        r = int(c_yellow[0] + factor * (c_red[0] - c_yellow[0]))
+        g = int(c_yellow[1] + factor * (c_red[1] - c_yellow[1]))
+        b = int(c_yellow[2] + factor * (c_red[2] - c_yellow[2]))
+        
+    return (r, g, b)
+
 def latlng_to_tile_float(lat, lng, zoom):
     lat_rad = math.radians(lat)
     n = 2.0 ** zoom
@@ -299,9 +326,10 @@ def main():
     particle_timer = 0
     
     def update_route():
-        nonlocal current_path, current_travel_time
+        nonlocal current_path, current_travel_time, particles
         current_path, current_travel_time = a_star_search(graph, current_start, current_dest)
         save_map_txt(graph, current_start, current_dest)
+        particles = []
         
     update_route()
     
@@ -468,11 +496,13 @@ def main():
                 
                 # Check path inclusion
                 is_in_path = False
+                path_index = -1
                 if current_path:
                     for idx in range(len(current_path) - 1):
                         if (current_path[idx] == node_id and current_path[idx+1] == neighbor_id) or \
                            (current_path[idx] == neighbor_id and current_path[idx+1] == node_id):
                             is_in_path = True
+                            path_index = idx
                             break
                             
                 # Get the edge distance
@@ -497,7 +527,7 @@ def main():
                         int(congestion_color[2] * 0.5 + COLOR_BG[2] * 0.5)
                     )
                 else:
-                    color = congestion_color
+                    color = get_route_gradient_color(path_index + 0.5, len(current_path))
                 
                 coords = curved_edges.get((node_id, neighbor_id))
                 if coords and osm_params:
@@ -521,6 +551,11 @@ def main():
         for p in particles:
             seg_idx = p["segment"]
             progress = p["progress"]
+            
+            # Defensive bounds checking to prevent IndexError
+            if not current_path or seg_idx >= len(current_path) - 1:
+                continue
+                
             u_id = current_path[seg_idx]
             v_id = current_path[seg_idx+1]
             
@@ -566,7 +601,8 @@ def main():
                 radius = 11
                 pygame.draw.circle(screen, (255, 7, 58, 60), (px, py), radius + 8, 2)
             elif current_path and node_id in current_path:
-                color = COLOR_PATH
+                idx = current_path.index(node_id)
+                color = get_route_gradient_color(idx, len(current_path))
                 radius = 8
             else:
                 color = COLOR_NODE
@@ -640,11 +676,40 @@ def main():
             if curr_line:
                 lines.append(curr_line)
                 
-            path_y = y_offset + 15 + int(w_h * 0.09)
-            for idx, line in enumerate(lines[:5]):
+            path_y = y_offset + 15 + int(w_h * 0.08)
+            for idx, line in enumerate(lines[:3]):
                 line_surf = font_small.render(line, True, COLOR_TEXT_SECONDARY)
                 screen.blit(line_surf, (map_w + 30, path_y))
                 path_y += int(w_h * 0.03)
+                
+            # Draw Route Gradient Progress Bar Legend
+            bar_y = y_offset + int(w_h * 0.20)
+            bar_x = map_w + 30
+            bar_w = panel_w - 60
+            bar_h = 8
+            
+            # Draw gradient bar
+            for dx in range(bar_w):
+                t = dx / bar_w
+                if t < 0.5:
+                    factor = t / 0.5
+                    r = int(57 + factor * (255 - 57))
+                    g = int(255 + factor * (215 - 255))
+                    b = int(20 + factor * (0 - 20))
+                else:
+                    factor = (t - 0.5) / 0.5
+                    r = int(255 + factor * (255 - 255))
+                    g = int(215 + factor * (7 - 215))
+                    b = int(0 + factor * (58 - 0))
+                pygame.draw.line(screen, (r, g, b), (bar_x + dx, bar_y), (bar_x + dx, bar_y + bar_h))
+                
+            # Draw labels under the bar
+            lbl_start = font_small.render("Start", True, COLOR_SOURCE)
+            lbl_mid = font_small.render("Mid", True, (255, 215, 0))
+            lbl_end = font_small.render("End", True, COLOR_DEST)
+            screen.blit(lbl_start, (bar_x, bar_y + bar_h + 2))
+            screen.blit(lbl_mid, (bar_x + bar_w // 2 - lbl_mid.get_width() // 2, bar_y + bar_h + 2))
+            screen.blit(lbl_end, (bar_x + bar_w - lbl_end.get_width(), bar_y + bar_h + 2))
         else:
             no_path = font_body.render("No path exists!", True, COLOR_DEST)
             screen.blit(no_path, (map_w + 30, y_offset + 15))
