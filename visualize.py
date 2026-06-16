@@ -92,7 +92,12 @@ def load_map_txt(file_path="map.txt"):
             v = int(parts[1])
             cost = float(parts[2])
             if u in graph.nodes and v in graph.nodes:
-                graph.nodes[u].neighbors.append((v, cost))
+                # Add u -> v if not already present
+                if not any(n[0] == v for n in graph.nodes[u].neighbors):
+                    graph.nodes[u].neighbors.append((v, cost))
+                # Add v -> u if not already present
+                if not any(n[0] == u for n in graph.nodes[v].neighbors):
+                    graph.nodes[v].neighbors.append((u, cost))
                 
     return graph, start_node, dest_node
 
