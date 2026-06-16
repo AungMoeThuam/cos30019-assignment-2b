@@ -1,15 +1,41 @@
 # visualize.py
-# This script loads map.txt directly and displays the street network and A* route in Pygame.
+# This script loads map.txt directly, stitches a live OpenStreetMap background,
+# and displays the street network and A* route in Pygame.
 # Usage: python visualize.py
 
 import pygame
 import os
 import sys
 import math
+import urllib.request
+import io
+from PIL import Image
 from src.routing.a_star import a_star_search
 
-# Node ID to pixel coordinates (calibrated from map.png)
-NODE_PIXELS = {
+# 1. Concise WGS84 coordinates from map.md (for visual purposes)
+VISUAL_COORDS = {
+    2820: (-37.840, 144.989),
+    2825: (-37.838, 144.997),
+    2827: (-37.837, 145.012),
+    3180: (-37.843, 145.023),
+    4032: (-37.843, 145.005),
+    4321: (-37.843, 144.997),
+    4057: (-37.845, 145.012),
+    3662: (-37.849, 144.993),
+    3002: (-37.852, 144.993),
+    4263: (-37.855, 144.993),
+    4266: (-37.855, 145.000),
+    3120: (-37.855, 145.005),
+    3127: (-37.855, 145.012),
+    4270: (-37.851, 144.993),
+    4043: (-37.851, 145.005),
+    3682: (-37.852, 145.023),
+    2000: (-37.858, 145.023),
+    4051: (-37.841821, 145.007708) # Estimated from neighborhood relationships
+}
+
+# 2. Hardcoded fallback pixel coordinates for offline mode (static map.png)
+FALLBACK_PIXELS = {
     2000: (415, 421),
     2820: (129, 98),
     2825: (272, 55),
@@ -47,8 +73,8 @@ COLOR_HOVER = (255, 255, 255)
 class GraphNode:
     def __init__(self, node_id, lat, lng):
         self.id = node_id
-        self.lat = lat
-        self.lng = lng
+        self.lat = lat # dataset average lat (for A* heuristic)
+        self.lng = lng # dataset average lng (for A* heuristic)
         self.neighbors = [] # list of (neighbor_id, cost)
 
 class MapGraph:
@@ -112,6 +138,68 @@ def save_map_txt(graph, start_node, dest_node, file_path="map.txt"):
     except Exception as e:
         print(f"Warning: Failed to save changes back to map.txt: {e}")
 
+# Helper functions for OSM Mercator projection
+def latlng_to_tile_float(lat, lng, zoom):
+    lat_rad = math.radians(lat)
+    n = 2.0 ** zoom
+    x = (lng + 180.0) / 360.0 * n
+    y = (1.0 - math.log(math.tan(lat_rad) + (1.0 / math.cos(lat_rad))) / math.pi) / 2.0 * n
+    return x, y
+
+def get_live_osm_map(zoom=15):
+    """
+    Downloads OpenStreetMap tiles for the bounding box of the visual coordinates,
+    stitches them, and saves as osm_map.png. Returns coordinates parameters if successful.
+    """
+    lats = [c[0] for c in VISUAL_COORDS.values()]
+    lngs = [c[1] for c in VISUAL_COORDS.values()]
+    
+    # Add a small padding boundary around the nodes
+    min_lat, max_lat = min(lats) - 0.003, max(lats) + 0.003
+    min_lng, max_lng = min(lngs) - 0.003, max(lngs) + 0.003
+    
+    x_min_f, y_min_f = latlng_to_tile_float(max_lat, min_lng, zoom)
+    x_max_f, y_max_f = latlng_to_tile_float(min_lat, max_lng, zoom)
+    
+    min_xtile, max_xtile = int(x_min_f), int(x_max_f)
+    min_ytile, max_ytile = int(y_min_f), int(y_max_f)
+    
+    num_cols = max_xtile - min_xtile + 1
+    num_rows = max_ytile - min_ytile + 1
+    
+    headers = {"User-Agent": "TBRGS-Map-Visualizer/1.0 (contact: user@example.com)"}
+    
+    # If the file already exists locally, we don't need to download it again
+    if os.path.exists("osm_map.png"):
+        return min_xtile, min_ytile, num_cols, num_rows
+        
+    print("Fetching live OpenStreetMap tiles...")
+    stitched_img = Image.new("RGB", (num_cols * 256, num_rows * 256))
+    
+    success = True
+    for r, ytile in enumerate(range(min_ytile, max_ytile + 1)):
+        for c, xtile in enumerate(range(min_xtile, max_xtile + 1)):
+            url = f"https://tile.openstreetmap.org/{zoom}/{xtile}/{ytile}.png"
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    tile_data = response.read()
+                    tile_image = Image.open(io.BytesIO(tile_data))
+                    stitched_img.paste(tile_image, (c * 256, r * 256))
+            except Exception as e:
+                print(f"Error downloading tile {xtile},{ytile}: {e}")
+                success = False
+                break
+        if not success:
+            break
+            
+    if success:
+        stitched_img.save("osm_map.png")
+        print("Live OpenStreetMap map generated!")
+        return min_xtile, min_ytile, num_cols, num_rows
+    else:
+        return None
+
 def main():
     graph, start_node, dest_node = load_map_txt("map.txt")
     
@@ -129,7 +217,35 @@ def main():
         font_body = pygame.font.Font(None, 16)
         font_small = pygame.font.Font(None, 13)
 
-    map_w, map_h = 479, 447
+    # Visual mode flags
+    zoom = 15
+    osm_params = get_live_osm_map(zoom)
+    
+    if osm_params:
+        # Live OSM configuration
+        min_xtile, min_ytile, num_cols, num_rows = osm_params
+        orig_map_w = num_cols * 256
+        orig_map_h = num_rows * 256
+        map_w, map_h = 600, 500 # Slightly wider screen for OSM map
+        scale_x = map_w / orig_map_w
+        scale_y = map_h / orig_map_h
+        
+        # Project visual coordinates to screen pixels
+        node_pixels = {}
+        for nid, (lat, lng) in VISUAL_COORDS.items():
+            xf, yf = latlng_to_tile_float(lat, lng, zoom)
+            px = (xf - min_xtile) * 256
+            py = (yf - min_ytile) * 256
+            node_pixels[nid] = (int(px * scale_x), int(py * scale_y))
+            
+        map_file_name = "osm_map.png"
+    else:
+        # Fallback to offline static map
+        print("Failed to download live OSM map. Falling back to offline map.png.")
+        map_w, map_h = 479, 447
+        node_pixels = FALLBACK_PIXELS
+        map_file_name = "map.png"
+        
     panel_w = 321
     window_w = map_w + panel_w
     window_h = 500
@@ -141,17 +257,17 @@ def main():
         print("Note: 'map.txt' contents remain unchanged.")
         return
         
-    pygame.display.set_caption("TBRGS Map Visualizer")
+    pygame.display.set_caption("TBRGS Map Visualizer (OpenStreetMap)")
     clock = pygame.time.Clock()
     
-    # Load map background
+    # Load background map
     map_image = None
-    if os.path.exists("map.png"):
+    if os.path.exists(map_file_name):
         try:
-            map_image = pygame.image.load("map.png").convert()
+            map_image = pygame.image.load(map_file_name).convert()
             map_image = pygame.transform.scale(map_image, (map_w, map_h))
         except Exception as e:
-            print(f"Error loading map.png: {e}")
+            print(f"Error loading map background: {e}")
             
     current_start = start_node
     current_dest = dest_node
@@ -173,7 +289,7 @@ def main():
         hovered_edge = None
         
         # Check node hovers
-        for node_id, (px, py) in NODE_PIXELS.items():
+        for node_id, (px, py) in node_pixels.items():
             dist = math.hypot(mouse_pos[0] - px, mouse_pos[1] - py)
             if dist <= 12:
                 hovered_node = node_id
@@ -183,10 +299,10 @@ def main():
         if hovered_node is None and mouse_pos[0] < map_w and mouse_pos[1] < map_h:
             min_dist_to_edge = 8.0
             for node_id, node in graph.nodes.items():
-                p1 = NODE_PIXELS.get(node_id)
+                p1 = node_pixels.get(node_id)
                 if not p1: continue
                 for neighbor_id, cost in node.neighbors:
-                    p2 = NODE_PIXELS.get(neighbor_id)
+                    p2 = node_pixels.get(neighbor_id)
                     if not p2: continue
                     x0, y0 = mouse_pos
                     x1, y1 = p1
@@ -224,14 +340,14 @@ def main():
         # Draw edges
         drawn_edges = set()
         for node_id, node in graph.nodes.items():
-            p1 = NODE_PIXELS.get(node_id)
+            p1 = node_pixels.get(node_id)
             if not p1: continue
             for neighbor_id, cost in node.neighbors:
                 edge_key = tuple(sorted((node_id, neighbor_id)))
                 if edge_key in drawn_edges: continue
                 drawn_edges.add(edge_key)
                 
-                p2 = NODE_PIXELS.get(neighbor_id)
+                p2 = node_pixels.get(neighbor_id)
                 if not p2: continue
                 
                 # Check path
@@ -248,7 +364,7 @@ def main():
                     pygame.draw.line(screen, COLOR_EDGE, p1, p2, 2)
                     
         # Draw Nodes
-        for node_id, (px, py) in NODE_PIXELS.items():
+        for node_id, (px, py) in node_pixels.items():
             if node_id == current_start:
                 color = COLOR_SOURCE
                 radius = 9
@@ -340,12 +456,13 @@ def main():
             
         # Tooltips
         if hovered_node is not None:
-            node = graph.nodes[hovered_node]
+            # Show the concise visual coordinate from map.md
+            v_lat, v_lng = VISUAL_COORDS[hovered_node]
             tooltip_rect = pygame.Rect(mouse_pos[0] + 15, mouse_pos[1] - 35, 180, 50)
             pygame.draw.rect(screen, (20, 20, 20), tooltip_rect)
             pygame.draw.rect(screen, COLOR_ACCENT, tooltip_rect, 1)
             t1 = font_small.render(f"Intersection: {hovered_node}", True, COLOR_TEXT_PRIMARY)
-            t2 = font_small.render(f"Lat: {node.lat:.5f}, Lng: {node.lng:.5f}", True, COLOR_TEXT_SECONDARY)
+            t2 = font_small.render(f"Lat: {v_lat:.5f}, Lng: {v_lng:.5f}", True, COLOR_TEXT_SECONDARY)
             screen.blit(t1, (mouse_pos[0] + 20, mouse_pos[1] - 30))
             screen.blit(t2, (mouse_pos[0] + 20, mouse_pos[1] - 15))
             

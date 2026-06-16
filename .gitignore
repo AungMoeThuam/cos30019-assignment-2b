@@ -144,3 +144,7 @@ Desktop.ini
 # Ignore saved models (trained checkpoints)
 # models_saved/*
 !models_saved/.gitkeep
+
+# Ignore runtime visualization maps and outputs
+osm_map.png
+map.txt
