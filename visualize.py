@@ -1,7 +1,7 @@
 # visualize.py
 # This script loads map.txt and cos30019_2b.geojson, stitches a live CartoDB Voyager map,
 # and displays the street network with curved routes and A* pathfinding in Pygame.
-# Features: Responsive full-screen toggling, traffic flow animations, and a modern dashboard.
+# Features: Responsive full-screen toggling, traffic flow animations, and green-yellow-red congestion coloring.
 # Usage: python visualize.py
 
 import pygame
@@ -11,8 +11,9 @@ import math
 import json
 import urllib.request
 import io
+import pandas as pd
 from PIL import Image
-from src.routing.a_star import a_star_search
+from src.routing.a_star import a_star_search, heuristic
 
 # Fallback pixel coordinates for offline mode (static map.png)
 FALLBACK_PIXELS = {
@@ -45,12 +46,8 @@ COLOR_TEXT_SECONDARY = (160, 160, 175)
 COLOR_ACCENT = (0, 229, 255)      # Cyan Glow
 COLOR_SOURCE = (57, 255, 20)      # Neon Lime Green
 COLOR_DEST = (255, 7, 58)         # Neon Red
-COLOR_PATH = (255, 215, 0)        # Gold/Yellow
-COLOR_EDGE = (70, 70, 85)
-COLOR_NODE = (100, 100, 120)
+COLOR_NODE = (120, 120, 140)
 COLOR_HOVER = (255, 255, 255)
-COLOR_GLOW_SOURCE = (57, 255, 20, 40)
-COLOR_GLOW_DEST = (255, 7, 58, 40)
 
 class GraphNode:
     def __init__(self, node_id, lat, lng):
@@ -161,6 +158,55 @@ def load_geojson_data(file_path="cos30019_2b.geojson"):
         
     return visual_coords, curved_edges
 
+def load_edge_distances(edges_csv="data/processed/edges.csv"):
+    distances = {}
+    if not os.path.exists(edges_csv):
+        return distances
+    try:
+        df = pd.read_csv(edges_csv)
+        df = df.dropna(subset=["from_site", "to_site"])
+        for _, row in df.iterrows():
+            u = int(row["from_site"])
+            v = int(row["to_site"])
+            dist = float(row["travel_distance_km"])
+            distances[(u, v)] = dist
+            distances[(v, u)] = dist
+    except Exception as e:
+        print(f"Error loading edges.csv: {e}")
+    return distances
+
+def get_congestion_color(cost, distance):
+    """
+    Interpolates segment color from Green -> Yellow -> Red based on speed/congestion.
+    Free flow (60 km/h) = 1.0 (Green). Moderate delay = 1.6 (Yellow). Severe congestion = 2.2+ (Red).
+    """
+    base_time = (distance / 60.0) * 3600.0  # travel time in seconds at 60 km/h free-flow
+    if base_time <= 0:
+        return (57, 255, 20)  # Green fallback
+        
+    ratio = cost / base_time
+    factor = min(1.0, max(0.0, (ratio - 1.0) / 1.2))
+    
+    # Core colors
+    c_green = (57, 255, 20)
+    c_yellow = (255, 215, 0)
+    c_red = (255, 7, 58)
+    
+    if factor < 0.5:
+        # Green to Yellow
+        t = factor / 0.5
+        r = int(c_green[0] + t * (c_yellow[0] - c_green[0]))
+        g = int(c_green[1] + t * (c_yellow[1] - c_green[1]))
+        b = int(c_green[2] + t * (c_yellow[2] - c_green[2]))
+    else:
+        # Yellow to Red
+        t = (factor - 0.5) / 0.5
+        r = int(c_yellow[0] + t * (c_red[0] - c_yellow[0]))
+        g = int(c_yellow[1] + t * (c_red[1] - c_yellow[1]))
+        b = int(c_yellow[2] + t * (c_red[2] - c_yellow[2]))
+        
+    return (r, g, b)
+
 def latlng_to_tile_float(lat, lng, zoom):
     lat_rad = math.radians(lat)
     n = 2.0 ** zoom
@@ -222,23 +268,20 @@ def get_live_osm_map(visual_coords, zoom=15):
 def main():
     graph, start_node, dest_node = load_map_txt("map.txt")
     visual_coords, curved_edges = load_geojson_data("cos30019_2b.geojson")
+    edge_distances = load_edge_distances("data/processed/edges.csv")
     
     pygame.init()
     pygame.font.init()
     
-    # Visual mode configuration
     zoom = 15
     osm_params = get_live_osm_map(visual_coords, zoom)
     
-    # Set window to be resizable
     window_w, window_h = 1100, 750
     screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE)
     pygame.display.set_caption("TBRGS Map Visualizer (OpenStreetMap)")
     clock = pygame.time.Clock()
     
     is_fullscreen = False
-    
-    # Load raw map background image
     raw_map_image = None
     map_file_name = "osm_map.png" if osm_params else "map.png"
     if os.path.exists(map_file_name):
@@ -252,7 +295,6 @@ def main():
     current_path = None
     current_travel_time = 0.0
     
-    # Particle animation settings for traffic flow
     particles = []
     particle_timer = 0
     
@@ -265,7 +307,6 @@ def main():
     
     running = True
     while running:
-        # Get active dimensions dynamically (supports resizing and fullscreen)
         w_w, w_h = screen.get_size()
         panel_w = int(w_w * 0.3)
         if panel_w < 300:
@@ -276,7 +317,6 @@ def main():
         map_w = w_w - panel_w
         map_h = w_h
         
-        # Load fonts scaled to height/width
         font_size_body = max(13, int(w_h * 0.02))
         font_size_title = max(20, int(w_h * 0.032))
         font_size_header = max(16, int(w_h * 0.024))
@@ -292,7 +332,6 @@ def main():
             font_body = pygame.font.Font(None, font_size_body + 2)
             font_small = pygame.font.Font(None, max(11, int(w_h * 0.016)))
             
-        # Scale backgrounds and coordinates dynamically
         if osm_params:
             min_xtile, min_ytile, num_cols, num_rows = osm_params
             orig_map_w = num_cols * 256
@@ -300,7 +339,6 @@ def main():
             scale_x = map_w / orig_map_w
             scale_y = map_h / orig_map_h
             
-            # Recalculate node pixels based on current window size
             node_pixels = {}
             for nid, (lat, lng) in visual_coords.items():
                 xf, yf = latlng_to_tile_float(lat, lng, zoom)
@@ -308,23 +346,19 @@ def main():
                 py = (yf - min_ytile) * 256
                 node_pixels[nid] = (int(px * scale_x), int(py * scale_y))
         else:
-            # Fallback to static layout scaled
             scale_x = map_w / 479.0
             scale_y = map_h / 447.0
             node_pixels = {nid: (int(x * scale_x), int(y * scale_y)) for nid, (x, y) in FALLBACK_PIXELS.items()}
             
-        # 1. Update Traffic Particles
         particle_timer += 1
         if current_path and len(current_path) >= 2:
-            # Spawn a new particle occasionally
             if particle_timer % 15 == 0:
                 particles.append({
-                    "segment": 0,    # Index in path
-                    "progress": 0.0, # Progress along current segment (0.0 to 1.0)
-                    "speed": 0.03    # Speed factor
+                    "segment": 0,
+                    "progress": 0.0,
+                    "speed": 0.03
                 })
                 
-            # Update active particles
             active_particles = []
             for p in particles:
                 p["progress"] += p["speed"]
@@ -337,19 +371,16 @@ def main():
         else:
             particles = []
             
-        # Event Processing
         mouse_pos = pygame.mouse.get_pos()
         hovered_node = None
         hovered_edge = None
         
-        # Check node hovers
         for node_id, (px, py) in node_pixels.items():
             dist = math.hypot(mouse_pos[0] - px, mouse_pos[1] - py)
             if dist <= 14:
                 hovered_node = node_id
                 break
                 
-        # Check edge hovers if not hovering over a node
         if hovered_node is None and mouse_pos[0] < map_w and mouse_pos[1] < map_h:
             min_dist_to_edge = 10.0
             for node_id, node in graph.nodes.items():
@@ -398,9 +429,6 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.VIDEORESIZE:
-                # Screen size updated dynamically, handled at start of loop
-                pass
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if hovered_node is not None:
                     if event.button == 1: # Left click
@@ -411,7 +439,6 @@ def main():
                         update_route()
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_f or event.key == pygame.K_F11:
-                    # Toggle Full Screen Mode
                     is_fullscreen = not is_fullscreen
                     if is_fullscreen:
                         screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
@@ -420,14 +447,13 @@ def main():
                         
         screen.fill(COLOR_BG)
         
-        # 2. Render Scaled Background Map
         if raw_map_image:
             scaled_map = pygame.transform.smoothscale(raw_map_image, (map_w, map_h))
             screen.blit(scaled_map, (0, 0))
         else:
             pygame.draw.rect(screen, (30, 30, 35), (0, 0, map_w, map_h))
             
-        # Draw Network Edges
+        # Draw Network Edges with Congestion Heatmap Colors
         drawn_edges = set()
         for node_id, node in graph.nodes.items():
             p1 = node_pixels.get(node_id)
@@ -449,8 +475,29 @@ def main():
                             is_in_path = True
                             break
                             
-                color = COLOR_PATH if is_in_path else COLOR_EDGE
-                thickness = 6 if is_in_path else 2
+                # Get the edge distance
+                dist = edge_distances.get((node_id, neighbor_id))
+                if not dist:
+                    # Fallback to geodesic Haversine distance
+                    lat1, lon1 = graph.nodes[node_id].lat, graph.nodes[node_id].lng
+                    lat2, lon2 = graph.nodes[neighbor_id].lat, graph.nodes[neighbor_id].lng
+                    dist = heuristic((lat1, lon1), (lat2, lon2)) / 3600.0 * 60.0
+                    
+                # Congestion color
+                congestion_color = get_congestion_color(cost, dist)
+                
+                # Render style: path is thick, background is thin
+                thickness = 7 if is_in_path else 3
+                
+                # Reduce opacity of background edges slightly by blending with BG color
+                if not is_in_path:
+                    color = (
+                        int(congestion_color[0] * 0.5 + COLOR_BG[0] * 0.5),
+                        int(congestion_color[1] * 0.5 + COLOR_BG[1] * 0.5),
+                        int(congestion_color[2] * 0.5 + COLOR_BG[2] * 0.5)
+                    )
+                else:
+                    color = congestion_color
                 
                 coords = curved_edges.get((node_id, neighbor_id))
                 if coords and osm_params:
@@ -461,16 +508,16 @@ def main():
                         py = (yf - min_ytile) * 256
                         points.append((int(px * scale_x), int(py * scale_y)))
                     if len(points) >= 2:
-                        # Draw soft glow behind active paths
                         if is_in_path:
-                            pygame.draw.lines(screen, (255, 160, 0), False, points, thickness + 4)
+                            # Draw soft glow matching congestion color behind active path
+                            pygame.draw.lines(screen, (color[0], color[1], color[2]), False, points, thickness + 4)
                         pygame.draw.lines(screen, color, False, points, thickness)
                 else:
                     if is_in_path:
-                        pygame.draw.line(screen, (255, 160, 0), p1, p2, thickness + 4)
+                        pygame.draw.line(screen, color, p1, p2, thickness + 4)
                     pygame.draw.line(screen, color, p1, p2, thickness)
                     
-        # 3. Draw Moving Traffic Particles
+        # Draw Moving Traffic Particles
         for p in particles:
             seg_idx = p["segment"]
             progress = p["progress"]
@@ -479,7 +526,6 @@ def main():
             
             coords = curved_edges.get((u_id, v_id))
             if coords and osm_params:
-                # Interpolate along polyline segments
                 points = []
                 for lat, lng in coords:
                     xf, yf = latlng_to_tile_float(lat, lng, zoom)
@@ -487,7 +533,6 @@ def main():
                     py = (yf - min_ytile) * 256
                     points.append((int(px * scale_x), int(py * scale_y)))
                 
-                # Find interpolation point along polyline
                 num_pts = len(points)
                 if num_pts >= 2:
                     total_progress = progress * (num_pts - 1)
@@ -500,7 +545,6 @@ def main():
                 else:
                     continue
             else:
-                # Fallback to straight line interpolation
                 p1 = node_pixels[u_id]
                 p2 = node_pixels[v_id]
                 part_x = p1[0] + progress * (p2[0] - p1[0])
@@ -509,19 +553,17 @@ def main():
             pygame.draw.circle(screen, (255, 255, 255), (int(part_x), int(part_y)), 4)
             pygame.draw.circle(screen, COLOR_ACCENT, (int(part_x), int(part_y)), 7, 1)
 
-        # 4. Draw Intersections/Nodes
+        # Draw Intersections/Nodes
         for node_id, (px, py) in node_pixels.items():
             if node_id not in graph.nodes: continue
             
             if node_id == current_start:
                 color = COLOR_SOURCE
                 radius = 11
-                # Halos
                 pygame.draw.circle(screen, (57, 255, 20, 60), (px, py), radius + 8, 2)
             elif node_id == current_dest:
                 color = COLOR_DEST
                 radius = 11
-                # Halos
                 pygame.draw.circle(screen, (255, 7, 58, 60), (px, py), radius + 8, 2)
             elif current_path and node_id in current_path:
                 color = COLOR_PATH
@@ -535,18 +577,16 @@ def main():
                 
             pygame.draw.circle(screen, color, (px, py), radius)
             
-            # ID labels
             lbl = font_small.render(str(node_id), True, COLOR_TEXT_PRIMARY)
             screen.blit(lbl, (px + 12, py - 7))
             
-        # 5. Render Glassmorphism Side Panel
+        # Render Glassmorphism Side Panel
         panel_rect = pygame.Rect(map_w, 0, panel_w, w_h)
         pygame.draw.rect(screen, COLOR_PANEL_BG, panel_rect)
         pygame.draw.line(screen, (60, 60, 75), (map_w, 0), (map_w, w_h), 2)
         
         y_offset = int(w_h * 0.03)
         
-        # Navigation Title Header
         title_surf = font_title.render("TBRGS NAVIGATOR", True, COLOR_ACCENT)
         screen.blit(title_surf, (map_w + 20, y_offset))
         y_offset += int(w_h * 0.07)
@@ -561,7 +601,6 @@ def main():
         screen.blit(lbl_s, (map_w + 30, y_offset + 15))
         screen.blit(lbl_d, (map_w + 30, y_offset + 15 + int(w_h * 0.04)))
         
-        # Instructions / Coordinates in card
         if current_start in visual_coords:
             c_lat, c_lng = visual_coords[current_start]
             lbl_coords = font_small.render(f"Lat: {c_lat:.5f}, Lng: {c_lng:.5f}", True, COLOR_TEXT_SECONDARY)
@@ -587,7 +626,6 @@ def main():
             screen.blit(time_result, (map_w + 30, y_offset + 15))
             screen.blit(nodes_count, (map_w + 30, y_offset + 15 + int(w_h * 0.04)))
             
-            # Format route node list to wrap beautifully inside the card
             path_str = " -> ".join(map(str, current_path))
             words = path_str.split(" -> ")
             lines = []
@@ -629,7 +667,7 @@ def main():
             screen.blit(help_surf, (map_w + 20, y_offset))
             y_offset += int(w_h * 0.03)
             
-        # 6. Render Overlay Tooltips
+        # Render Overlay Tooltips
         if hovered_node is not None and hovered_node in visual_coords:
             v_lat, v_lng = visual_coords[hovered_node]
             tooltip_rect = pygame.Rect(mouse_pos[0] + 15, mouse_pos[1] - 40, 200, 56)
@@ -647,8 +685,20 @@ def main():
             tooltip_rect = pygame.Rect(mouse_pos[0] + 15, mouse_pos[1] - 30, 180, 48)
             pygame.draw.rect(screen, (15, 15, 20), tooltip_rect, border_radius=4)
             pygame.draw.rect(screen, COLOR_ACCENT, tooltip_rect, 1, border_radius=4)
+            
+            # Find the distance
+            dist = edge_distances.get((u, v))
+            if not dist:
+                lat1, lon1 = graph.nodes[u].lat, graph.nodes[u].lng
+                lat2, lon2 = graph.nodes[v].lat, graph.nodes[v].lng
+                dist = heuristic((lat1, lon1), (lat2, lon2)) / 3600.0 * 60.0
+                
+            # Speed = distance / time
+            # speed_kmh = (dist / (cost / 3600))
+            speed = (dist / (cost / 3600.0)) if cost > 0 else 0
+            
             t1 = font_small.render(f"Segment: {u} -> {v}", True, COLOR_TEXT_PRIMARY)
-            t2 = font_small.render(f"Travel Time: {int(round(cost))} seconds", True, COLOR_TEXT_SECONDARY)
+            t2 = font_small.render(f"Travel Time: {int(round(cost))}s ({speed:.1f} km/h)", True, COLOR_TEXT_SECONDARY)
             screen.blit(t1, (mouse_pos[0] + 25, mouse_pos[1] - 25))
             screen.blit(t2, (mouse_pos[0] + 25, mouse_pos[1] - 12))
 
