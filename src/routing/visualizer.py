@@ -39,10 +39,36 @@ COLOR_TEXT_SECONDARY = (180, 180, 180)
 COLOR_ACCENT = (0, 229, 255) # Cyan
 COLOR_SOURCE = (57, 255, 20) # Bright Lime Green
 COLOR_DEST = (255, 7, 58) # Neon Red
-COLOR_PATH = (255, 207, 0) # Gold
 COLOR_EDGE = (100, 100, 100)
 COLOR_NODE = (80, 80, 80)
 COLOR_HOVER = (255, 255, 255)
+
+def get_route_gradient_color(index, total):
+    """
+    Interpolates active route color from Green -> Yellow -> Red based on path index.
+    """
+    if total <= 1:
+        return (57, 255, 20)  # Green fallback
+    t = index / (total - 1)
+    
+    c_green = (57, 255, 20)
+    c_yellow = (255, 215, 0)
+    c_red = (255, 7, 58)
+    
+    if t < 0.5:
+        # Green to Yellow
+        factor = t / 0.5
+        r = int(c_green[0] + factor * (c_yellow[0] - c_green[0]))
+        g = int(c_green[1] + factor * (c_yellow[1] - c_green[1]))
+        b = int(c_green[2] + factor * (c_yellow[2] - c_green[2]))
+    else:
+        # Yellow to Red
+        factor = (t - 0.5) / 0.5
+        r = int(c_yellow[0] + factor * (c_red[0] - c_yellow[0]))
+        g = int(c_yellow[1] + factor * (c_red[1] - c_yellow[1]))
+        b = int(c_yellow[2] + factor * (c_red[2] - c_yellow[2]))
+        
+    return (r, g, b)
 
 def run_visualizer(graph, initial_path, start_node_id, dest_node_id, initial_time_str, initial_model_name):
     pygame.init()
@@ -242,18 +268,20 @@ def run_visualizer(graph, initial_path, start_node_id, dest_node_id, initial_tim
                 
                 p2 = NODE_PIXELS.get(neighbor_id)
                 if not p2: continue
-                
-                # Check if this edge is in the current path
+                                # Check if this edge is in the current path
                 is_in_path = False
+                path_index = -1
                 if current_path:
                     for idx in range(len(current_path) - 1):
                         if (current_path[idx] == node_id and current_path[idx+1] == neighbor_id) or \
                            (current_path[idx] == neighbor_id and current_path[idx+1] == node_id):
                             is_in_path = True
+                            path_index = idx
                             break
                             
                 if is_in_path:
-                    pygame.draw.line(screen, COLOR_PATH, p1, p2, 5)
+                    color = get_route_gradient_color(path_index + 0.5, len(current_path))
+                    pygame.draw.line(screen, color, p1, p2, 5)
                 else:
                     pygame.draw.line(screen, COLOR_EDGE, p1, p2, 2)
                     
@@ -267,7 +295,8 @@ def run_visualizer(graph, initial_path, start_node_id, dest_node_id, initial_tim
                 color = COLOR_DEST
                 radius = 9
             elif current_path and node_id in current_path:
-                color = COLOR_PATH
+                idx = current_path.index(node_id)
+                color = get_route_gradient_color(idx, len(current_path))
                 radius = 7
             else:
                 color = COLOR_NODE
@@ -338,10 +367,39 @@ def run_visualizer(graph, initial_path, start_node_id, dest_node_id, initial_tim
             if curr_line:
                 lines.append(curr_line)
                 
-            for idx, line in enumerate(lines[:4]): # limit to 4 lines to fit panel
+            for idx, line in enumerate(lines[:3]): # limit to 3 lines to fit panel and legend
                 line_surf = font_body.render(line, True, COLOR_TEXT_PRIMARY)
                 screen.blit(line_surf, (map_w + 20, y_offset))
                 y_offset += 20
+                
+            # Draw Route Gradient Progress Bar Legend
+            bar_y = 300
+            bar_x = map_w + 20
+            bar_w = panel_w - 40
+            bar_h = 6
+            
+            for dx in range(bar_w):
+                t = dx / bar_w
+                if t < 0.5:
+                    factor = t / 0.5
+                    r = int(57 + factor * (255 - 57))
+                    g = int(255 + factor * (215 - 255))
+                    b = int(20 + factor * (0 - 20))
+                else:
+                    factor = (t - 0.5) / 0.5
+                    r = int(255 + factor * (255 - 255))
+                    g = int(215 + factor * (7 - 215))
+                    b = int(0 + factor * (58 - 0))
+                pygame.draw.line(screen, (r, g, b), (bar_x + dx, bar_y), (bar_x + dx, bar_y + bar_h))
+                
+            lbl_start = font_small.render("Start", True, COLOR_SOURCE)
+            lbl_mid = font_small.render("Mid", True, (255, 215, 0))
+            lbl_end = font_small.render("End", True, COLOR_DEST)
+            screen.blit(lbl_start, (bar_x, bar_y + bar_h + 2))
+            screen.blit(lbl_mid, (bar_x + bar_w // 2 - lbl_mid.get_width() // 2, bar_y + bar_h + 2))
+            screen.blit(lbl_end, (bar_x + bar_w - lbl_end.get_width(), bar_y + bar_h + 2))
+            
+            y_offset = 330
         else:
             no_path = font_body.render("No path found!", True, COLOR_DEST)
             screen.blit(no_path, (map_w + 20, y_offset))
