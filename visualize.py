@@ -641,8 +641,18 @@ def main():
                 
             pygame.draw.circle(screen, color, (px, py), radius)
             
-            lbl = font_small.render(str(node_id), True, COLOR_TEXT_PRIMARY)
-            screen.blit(lbl, (px + 12, py - 7))
+            # Render node ID badge for clear visibility on light map backgrounds
+            node_id_str = str(node_id)
+            lbl = font_small.render(node_id_str, True, COLOR_TEXT_PRIMARY)
+            text_w, text_h = lbl.get_size()
+            
+            badge_rect = pygame.Rect(px + 12, py - text_h // 2, text_w + 8, text_h + 4)
+            pygame.draw.rect(screen, (22, 22, 26), badge_rect, border_radius=4)
+            
+            outline_color = COLOR_ACCENT if node_id in [current_start, current_dest] else (100, 100, 110)
+            pygame.draw.rect(screen, outline_color, badge_rect, 1, border_radius=4)
+            
+            screen.blit(lbl, (px + 16, py - text_h // 2 + 2))
             
         # Render Glassmorphism Side Panel
         panel_rect = pygame.Rect(map_w, 0, panel_w, w_h)
