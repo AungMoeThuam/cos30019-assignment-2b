@@ -1,40 +1,19 @@
 # visualize.py
-# This script loads map.txt directly, stitches a live OpenStreetMap background,
-# and displays the street network and A* route in Pygame.
+# This script loads map.txt and cos30019_2b.geojson, stitches a live CartoDB Voyager map,
+# and displays the street network with curved routes and A* pathfinding in Pygame.
 # Usage: python visualize.py
 
 import pygame
 import os
 import sys
 import math
+import json
 import urllib.request
 import io
 from PIL import Image
 from src.routing.a_star import a_star_search
 
-# 1. Concise WGS84 coordinates from map.md (for visual purposes)
-VISUAL_COORDS = {
-    2820: (-37.840, 144.989),
-    2825: (-37.838, 144.997),
-    2827: (-37.837, 145.012),
-    3180: (-37.843, 145.023),
-    4032: (-37.843, 145.005),
-    4321: (-37.843, 144.997),
-    4057: (-37.845, 145.012),
-    3662: (-37.849, 144.993),
-    3002: (-37.852, 144.993),
-    4263: (-37.855, 144.993),
-    4266: (-37.855, 145.000),
-    3120: (-37.855, 145.005),
-    3127: (-37.855, 145.012),
-    4270: (-37.851, 144.993),
-    4043: (-37.851, 145.005),
-    3682: (-37.852, 145.023),
-    2000: (-37.858, 145.023),
-    4051: (-37.841821, 145.007708) # Estimated from neighborhood relationships
-}
-
-# 2. Hardcoded fallback pixel coordinates for offline mode (static map.png)
+# Hardcoded fallback pixel coordinates for offline mode (static map.png)
 FALLBACK_PIXELS = {
     2000: (415, 421),
     2820: (129, 98),
@@ -69,7 +48,6 @@ COLOR_EDGE = (100, 100, 100)
 COLOR_NODE = (80, 80, 80)
 COLOR_HOVER = (255, 255, 255)
 
-# Simple Graph structure representing loaded data
 class GraphNode:
     def __init__(self, node_id, lat, lng):
         self.id = node_id
@@ -138,6 +116,53 @@ def save_map_txt(graph, start_node, dest_node, file_path="map.txt"):
     except Exception as e:
         print(f"Warning: Failed to save changes back to map.txt: {e}")
 
+def load_geojson_data(file_path="cos30019_2b.geojson"):
+    """
+    Loads precise coordinates of visual nodes and shape polylines of curved routes.
+    """
+    visual_coords = {}
+    curved_edges = {}
+    
+    if not os.path.exists(file_path):
+        print(f"Warning: {file_path} not found. Visual coords and curved lines will fall back.")
+        return visual_coords, curved_edges
+        
+    try:
+        with open(file_path, "r") as f:
+            data = json.load(f)
+            
+        for feature in data.get("features", []):
+            geom = feature.get("geometry", {})
+            props = feature.get("properties", {})
+            if not geom or not props:
+                continue
+                
+            gtype = geom.get("type")
+            name = props.get("name")
+            
+            if gtype == "Point" and name:
+                try:
+                    nid = int(name)
+                    lng, lat = geom["coordinates"]
+                    visual_coords[nid] = (lat, lng)
+                except ValueError:
+                    pass
+            elif gtype == "LineString" and name:
+                parts = name.split("-")
+                if len(parts) == 2:
+                    try:
+                        u, v = int(parts[0]), int(parts[1])
+                        # Convert [lng, lat] list to [(lat, lng), ...]
+                        coords = [(lat, lng) for lng, lat in geom["coordinates"]]
+                        curved_edges[(u, v)] = coords
+                        curved_edges[(v, u)] = coords[::-1] # Reverse coordinates for opposite direction
+                    except ValueError:
+                        pass
+    except Exception as e:
+        print(f"Error reading GeoJSON: {e}")
+        
+    return visual_coords, curved_edges
+
 # Helper functions for OSM Mercator projection
 def latlng_to_tile_float(lat, lng, zoom):
     lat_rad = math.radians(lat)
@@ -146,15 +171,18 @@ def latlng_to_tile_float(lat, lng, zoom):
     y = (1.0 - math.log(math.tan(lat_rad) + (1.0 / math.cos(lat_rad))) / math.pi) / 2.0 * n
     return x, y
 
-def get_live_osm_map(zoom=15):
+def get_live_osm_map(visual_coords, zoom=15):
     """
-    Downloads OpenStreetMap tiles for the bounding box of the visual coordinates,
+    Downloads CartoDB Voyager tiles for the bounding box of the visual coordinates,
     stitches them, and saves as osm_map.png. Returns coordinates parameters if successful.
     """
-    lats = [c[0] for c in VISUAL_COORDS.values()]
-    lngs = [c[1] for c in VISUAL_COORDS.values()]
+    if not visual_coords:
+        return None
+        
+    lats = [c[0] for c in visual_coords.values()]
+    lngs = [c[1] for c in visual_coords.values()]
     
-    # Add a small padding boundary around the nodes
+    # Add padding boundaries
     min_lat, max_lat = min(lats) - 0.003, max(lats) + 0.003
     min_lng, max_lng = min(lngs) - 0.003, max(lngs) + 0.003
     
@@ -169,11 +197,10 @@ def get_live_osm_map(zoom=15):
     
     headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"}
     
-    # If the file already exists locally, we don't need to download it again
     if os.path.exists("osm_map.png"):
         return min_xtile, min_ytile, num_cols, num_rows
         
-    print("Fetching live OpenStreetMap tiles...")
+    print("Fetching live CartoDB Voyager tiles...")
     stitched_img = Image.new("RGB", (num_cols * 256, num_rows * 256))
     
     success = True
@@ -195,13 +222,14 @@ def get_live_osm_map(zoom=15):
             
     if success:
         stitched_img.save("osm_map.png")
-        print("Live OpenStreetMap map generated!")
+        print("Live CartoDB Voyager map generated!")
         return min_xtile, min_ytile, num_cols, num_rows
     else:
         return None
 
 def main():
     graph, start_node, dest_node = load_map_txt("map.txt")
+    visual_coords, curved_edges = load_geojson_data("cos30019_2b.geojson")
     
     pygame.init()
     pygame.font.init()
@@ -219,20 +247,20 @@ def main():
 
     # Visual mode flags
     zoom = 15
-    osm_params = get_live_osm_map(zoom)
+    osm_params = get_live_osm_map(visual_coords, zoom)
     
     if osm_params:
         # Live OSM configuration
         min_xtile, min_ytile, num_cols, num_rows = osm_params
         orig_map_w = num_cols * 256
         orig_map_h = num_rows * 256
-        map_w, map_h = 600, 500 # Slightly wider screen for OSM map
+        map_w, map_h = 600, 500 # Display map box
         scale_x = map_w / orig_map_w
         scale_y = map_h / orig_map_h
         
         # Project visual coordinates to screen pixels
         node_pixels = {}
-        for nid, (lat, lng) in VISUAL_COORDS.items():
+        for nid, (lat, lng) in visual_coords.items():
             xf, yf = latlng_to_tile_float(lat, lng, zoom)
             px = (xf - min_xtile) * 256
             py = (yf - min_ytile) * 256
@@ -304,18 +332,45 @@ def main():
                 for neighbor_id, cost in node.neighbors:
                     p2 = node_pixels.get(neighbor_id)
                     if not p2: continue
-                    x0, y0 = mouse_pos
-                    x1, y1 = p1
-                    x2, y2 = p2
-                    len_sq = (x2 - x1)**2 + (y2 - y1)**2
-                    if len_sq == 0: continue
-                    t = max(0, min(1, ((x0 - x1) * (x2 - x1) + (y0 - y1) * (y2 - y1)) / len_sq))
-                    proj_x = x1 + t * (x2 - x1)
-                    proj_y = y1 + t * (y2 - y1)
-                    d = math.hypot(x0 - proj_x, y0 - proj_y)
-                    if d < min_dist_to_edge:
-                        min_dist_to_edge = d
-                        hovered_edge = (node_id, neighbor_id, cost)
+                    
+                    # If curved path exists, check distance along segments
+                    coords = curved_edges.get((node_id, neighbor_id))
+                    if coords and osm_params:
+                        points = []
+                        for lat, lng in coords:
+                            xf, yf = latlng_to_tile_float(lat, lng, zoom)
+                            px = (xf - min_xtile) * 256
+                            py = (yf - min_ytile) * 256
+                            points.append((int(px * scale_x), int(py * scale_y)))
+                            
+                        # Check distance to each segment in the polyline
+                        for i in range(len(points) - 1):
+                            x1, y1 = points[i]
+                            x2, y2 = points[i+1]
+                            x0, y0 = mouse_pos
+                            len_sq = (x2 - x1)**2 + (y2 - y1)**2
+                            if len_sq == 0: continue
+                            t = max(0, min(1, ((x0 - x1) * (x2 - x1) + (y0 - y1) * (y2 - y1)) / len_sq))
+                            proj_x = x1 + t * (x2 - x1)
+                            proj_y = y1 + t * (y2 - y1)
+                            d = math.hypot(x0 - proj_x, y0 - proj_y)
+                            if d < min_dist_to_edge:
+                                min_dist_to_edge = d
+                                hovered_edge = (node_id, neighbor_id, cost)
+                    else:
+                        # Fallback to straight line segment hover check
+                        x0, y0 = mouse_pos
+                        x1, y1 = p1
+                        x2, y2 = p2
+                        len_sq = (x2 - x1)**2 + (y2 - y1)**2
+                        if len_sq == 0: continue
+                        t = max(0, min(1, ((x0 - x1) * (x2 - x1) + (y0 - y1) * (y2 - y1)) / len_sq))
+                        proj_x = x1 + t * (x2 - x1)
+                        proj_y = y1 + t * (y2 - y1)
+                        d = math.hypot(x0 - proj_x, y0 - proj_y)
+                        if d < min_dist_to_edge:
+                            min_dist_to_edge = d
+                            hovered_edge = (node_id, neighbor_id, cost)
                         
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -358,13 +413,30 @@ def main():
                            (current_path[idx] == neighbor_id and current_path[idx+1] == node_id):
                             is_in_path = True
                             break
-                if is_in_path:
-                    pygame.draw.line(screen, COLOR_PATH, p1, p2, 5)
+                            
+                color = COLOR_PATH if is_in_path else COLOR_EDGE
+                thickness = 5 if is_in_path else 2
+                
+                # Check if we have curved coordinate list for the edge, draw it
+                coords = curved_edges.get((node_id, neighbor_id))
+                if coords and osm_params:
+                    points = []
+                    for lat, lng in coords:
+                        xf, yf = latlng_to_tile_float(lat, lng, zoom)
+                        px = (xf - min_xtile) * 256
+                        py = (yf - min_ytile) * 256
+                        points.append((int(px * scale_x), int(py * scale_y)))
+                    if len(points) >= 2:
+                        pygame.draw.lines(screen, color, False, points, thickness)
                 else:
-                    pygame.draw.line(screen, COLOR_EDGE, p1, p2, 2)
+                    # Draw straight line
+                    pygame.draw.line(screen, color, p1, p2, thickness)
                     
         # Draw Nodes
         for node_id, (px, py) in node_pixels.items():
+            if node_id not in graph.nodes:
+                continue
+                
             if node_id == current_start:
                 color = COLOR_SOURCE
                 radius = 9
@@ -455,9 +527,8 @@ def main():
             y_offset += 20
             
         # Tooltips
-        if hovered_node is not None:
-            # Show the concise visual coordinate from map.md
-            v_lat, v_lng = VISUAL_COORDS[hovered_node]
+        if hovered_node is not None and hovered_node in visual_coords:
+            v_lat, v_lng = visual_coords[hovered_node]
             tooltip_rect = pygame.Rect(mouse_pos[0] + 15, mouse_pos[1] - 35, 180, 50)
             pygame.draw.rect(screen, (20, 20, 20), tooltip_rect)
             pygame.draw.rect(screen, COLOR_ACCENT, tooltip_rect, 1)
