@@ -127,15 +127,16 @@ def load_geojson_data(file_path="cos30019_2b.geojson"):
         with open(file_path, "r") as f:
             data = json.load(f)
             
-        for feature in data.get("features", []):
+        features = data.get("features", [])
+        
+        # Pass 1: Parse all Point features to establish visual node coordinates
+        for feature in features:
             geom = feature.get("geometry", {})
             props = feature.get("properties", {})
             if not geom or not props:
                 continue
-                
             gtype = geom.get("type")
             name = props.get("name")
-            
             if gtype == "Point" and name:
                 try:
                     nid = int(name)
@@ -143,14 +144,41 @@ def load_geojson_data(file_path="cos30019_2b.geojson"):
                     visual_coords[nid] = (lat, lng)
                 except ValueError:
                     pass
-            elif gtype == "LineString" and name:
+                    
+        # Pass 2: Parse all LineString features and align coordinate directions with node endpoints
+        for feature in features:
+            geom = feature.get("geometry", {})
+            props = feature.get("properties", {})
+            if not geom or not props:
+                continue
+            gtype = geom.get("type")
+            name = props.get("name")
+            if gtype == "LineString" and name:
                 parts = name.split("-")
                 if len(parts) == 2:
                     try:
                         u, v = int(parts[0]), int(parts[1])
                         coords = [(lat, lng) for lng, lat in geom["coordinates"]]
-                        curved_edges[(u, v)] = coords
-                        curved_edges[(v, u)] = coords[::-1]
+                        
+                        if u in visual_coords and v in visual_coords:
+                            lat_u, lng_u = visual_coords[u]
+                            # Measure distance from first/last coordinates of the line to u's coordinate
+                            dist_start_u = (coords[0][0] - lat_u)**2 + (coords[0][1] - lng_u)**2
+                            dist_end_u = (coords[-1][0] - lat_u)**2 + (coords[-1][1] - lng_u)**2
+                            
+                            if dist_end_u < dist_start_u:
+                                # coords[-1] is closer to u, meaning coordinates are listed from v to u.
+                                # Reverse them for (u, v), keep as-is for (v, u)
+                                curved_edges[(u, v)] = coords[::-1]
+                                curved_edges[(v, u)] = coords
+                            else:
+                                # coords[0] is closer to u, meaning coordinates are listed from u to v.
+                                # Keep as-is for (u, v), reverse them for (v, u)
+                                curved_edges[(u, v)] = coords
+                                curved_edges[(v, u)] = coords[::-1]
+                        else:
+                            curved_edges[(u, v)] = coords
+                            curved_edges[(v, u)] = coords[::-1]
                     except ValueError:
                         pass
     except Exception as e:
