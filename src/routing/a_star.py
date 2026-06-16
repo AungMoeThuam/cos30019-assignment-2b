@@ -4,33 +4,83 @@
 import heapq
 import math
 
-def heuristic(node_coords, dest_coords, max_speed=60):
-    # TODO:
-    # 1. Calculate the geographic distance (e.g., Euclidean or Haversine distance)
-    #    between node_coords (lat1, lon1) and dest_coords (lat2, lon2).
-    # 2. Divide this distance by the speed limit (60 km/h) to get a lower bound of travel time.
-    #    - This ensures the heuristic is admissible (never overestimates the true travel time).
-    # 3. Return the heuristic estimate in seconds.
-    pass
 
-def a_star_search(graph, start_node, dest_node):
-    # TODO:
-    # 1. Initialize the priority queue (min-heap) with: (f_score, g_score, start_node, path_taken).
-    #    - g_score: actual travel time accumulated from start to current node.
-    #    - f_score: g_score + heuristic(current, destination).
-    # 
-    # 2. Maintain a set of visited/closed nodes to avoid cycles.
-    # 
-    # 3. Loop while priority queue is not empty:
-    #    - Pop node with lowest f_score.
-    #    - If current node == dest_node:
-    #      - Return the path (list of nodes) and final travel time (g_score).
-    #    - If current node already visited with a better time, continue.
-    #    - Else, for each neighbor of the current node:
-    #      - Calculate new_g_score = g_score + edge_travel_time.
-    #      - If new_g_score is lower than any previously recorded g_score for neighbor:
-    #        - Calculate neighbor's f_score = new_g_score + heuristic(neighbor, destination).
-    #        - Push (f_score, new_g_score, neighbor, path + [neighbor]) to queue.
-    # 
-    # 4. If queue is empty and destination is not reached, return None (no path exists).
-    pass
+def heuristic(node_coords, dest_coords, max_speed=60.0):
+    """
+    Calculate the geographic distance (Haversine distance)
+    between node_coords (lat1, lon1) and dest_coords (lat2, lon2).
+    Divide this distance by the speed limit (60 km/h) to get a lower bound of travel time.
+    This ensures the heuristic is admissible (never overestimates the true travel time).
+    """
+    lat1, lon1 = node_coords
+    lat2, lon2 = dest_coords
+
+    # Earth radius in km
+    R = 6371.0
+
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    distance_km = R * c
+
+    # Time in hours = distance / speed
+    # Time in seconds = (distance / speed) * 3600
+    travel_time_seconds = (distance_km / max_speed) * 3600.0
+    return travel_time_seconds
+
+
+def a_star_search(graph, start_node_id, dest_node_id):
+    """
+    Run A* search algorithm from start_node_id to dest_node_id.
+
+    :param graph: RoadNetworkGraph instance
+    :param start_node_id: starting node ID
+    :param dest_node_id: destination node ID
+    :return: path (list of node IDs), final travel time (float seconds)
+    """
+    if start_node_id not in graph.nodes or dest_node_id not in graph.nodes:
+        return None, None
+
+    start_node = graph.nodes[start_node_id]
+    dest_node = graph.nodes[dest_node_id]
+
+    dest_coords = (dest_node.lat, dest_node.lng)
+
+    # pq elements: (f_score, g_score, current_node_id, path)
+    pq = []
+
+    start_h = heuristic((start_node.lat, start_node.lng), dest_coords)
+    heapq.heappush(pq, (start_h, 0.0, start_node_id, [start_node_id]))
+
+    # Keep track of minimum g_score (travel time) to each visited node
+    g_scores = {start_node_id: 0.0}
+
+    while pq:
+        f, g, curr_id, path = heapq.heappop(pq)
+
+        if curr_id == dest_node_id:
+            return path, g
+
+        if g > g_scores.get(curr_id, float("inf")):
+            continue
+
+        curr_node = graph.nodes[curr_id]
+        for neighbor_id, cost in curr_node.neighbors:
+            new_g = g + cost
+
+            if new_g < g_scores.get(neighbor_id, float("inf")):
+                g_scores[neighbor_id] = new_g
+                neighbor_node = graph.nodes[neighbor_id]
+                h = heuristic((neighbor_node.lat, neighbor_node.lng), dest_coords)
+                f_new = new_g + h
+                heapq.heappush(pq, (f_new, new_g, neighbor_id, path + [neighbor_id]))
+
+    return None, None
