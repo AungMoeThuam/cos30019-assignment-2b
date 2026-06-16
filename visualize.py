@@ -167,7 +167,7 @@ def get_live_osm_map(zoom=15):
     num_cols = max_xtile - min_xtile + 1
     num_rows = max_ytile - min_ytile + 1
     
-    headers = {"User-Agent": "TBRGS-Map-Visualizer/1.0 (contact: user@example.com)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"}
     
     # If the file already exists locally, we don't need to download it again
     if os.path.exists("osm_map.png"):
@@ -179,7 +179,7 @@ def get_live_osm_map(zoom=15):
     success = True
     for r, ytile in enumerate(range(min_ytile, max_ytile + 1)):
         for c, xtile in enumerate(range(min_xtile, max_xtile + 1)):
-            url = f"https://tile.openstreetmap.org/{zoom}/{xtile}/{ytile}.png"
+            url = f"https://basemaps.cartocdn.com/rastertiles/voyager/{zoom}/{xtile}/{ytile}.png"
             req = urllib.request.Request(url, headers=headers)
             try:
                 with urllib.request.urlopen(req, timeout=5) as response:
