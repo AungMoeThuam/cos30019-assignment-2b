@@ -1,14 +1,14 @@
 # src/models/registry.py
 # This module registers available models for dependency injection.
 
-from src.models.lstm_model import LSTMRegressor
-from src.models.gru_model import GRURegressor
-from src.models.random_model import RandomBaselineModel
+from src.models.lstm_wrapper import LSTMRegressorWrapper
+from src.models.gru_wrapper import GRURegressorWrapper
+from src.models.random_forest_wrapper import RandomForestModelWrapper
 
 MODEL_REGISTRY = {
-    "LSTM": LSTMRegressor,
-    "GRU": GRURegressor,
-    "RANDOM": RandomBaselineModel,
+    "LSTM": LSTMRegressorWrapper,
+    "GRU": GRURegressorWrapper,
+    "RANDOM": RandomForestModelWrapper,
 }
 
 def get_model(name: str):

@@ -321,6 +321,96 @@ def get_live_osm_map(visual_coords, zoom=15):
         return None
 
 def main():
+    # Parse arguments or prompt user if map.txt doesn't exist or if requested
+    run_prediction = False
+    origin_node = None
+    dest_node = None
+    time_str = None
+    model_name = None
+
+    if len(sys.argv) >= 5:
+        # CLI arguments provided for prediction
+        try:
+            origin_node = int(sys.argv[1])
+            dest_node = int(sys.argv[2])
+            time_str = sys.argv[3]
+            model_name = sys.argv[4].upper()
+            run_prediction = True
+        except ValueError:
+            print("Error: Invalid CLI arguments. Origin and destination must be integers.")
+            sys.exit(1)
+    else:
+        # No CLI arguments provided. Check map.txt
+        map_exists = os.path.exists("map.txt")
+        choice = 'n'
+        if map_exists:
+            print("Found existing 'map.txt'.")
+            try:
+                choice = input("Do you want to run a new prediction first? (y/n) [Default: n]: ").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                choice = 'n'
+                
+        if not map_exists or choice == 'y':
+            print("\n--- Route prediction configuration ---")
+            
+            # Origin input
+            while True:
+                try:
+                    origin_input = input("Enter Origin Node (default: 2000): ").strip()
+                    if not origin_input:
+                        origin_node = 2000
+                        break
+                    origin_node = int(origin_input)
+                    break
+                except ValueError:
+                    print("Invalid node ID. Please enter an integer.")
+                    
+            # Destination input
+            while True:
+                try:
+                    dest_input = input("Enter Destination Node (default: 2825): ").strip()
+                    if not dest_input:
+                        dest_node = 2825
+                        break
+                    dest_node = int(dest_input)
+                    break
+                except ValueError:
+                    print("Invalid node ID. Please enter an integer.")
+                    
+            # Time input
+            while True:
+                time_input = input("Enter Departure Time in HHMM format (default: 1100): ").strip()
+                if not time_input:
+                    time_str = "1100"
+                    break
+                if len(time_input) == 4 and time_input.isdigit():
+                    hour = int(time_input[:2])
+                    minute = int(time_input[2:])
+                    if 0 <= hour <= 23 and 0 <= minute <= 59:
+                        time_str = time_input
+                        break
+                print("Invalid time format. Please enter in 24-hour HHMM format (e.g. 1100).")
+                
+            # Model input
+            while True:
+                model_input = input("Enter Model (LSTM, GRU, RANDOM; default: LSTM): ").strip().upper()
+                if not model_input:
+                    model_name = "LSTM"
+                    break
+                if model_input in ["LSTM", "GRU", "RANDOM"]:
+                    model_name = model_input
+                    break
+                print("Invalid model selection. Choose from LSTM, GRU, RANDOM.")
+                
+            run_prediction = True
+
+    if run_prediction:
+        from A2B import run_routing_and_prediction
+        success = run_routing_and_prediction(origin_node, dest_node, time_str, model_name, "map.txt")
+        if not success:
+            print("Failed to run prediction. Exiting.")
+            sys.exit(1)
+
     graph, start_node, dest_node = load_map_txt("map.txt")
     visual_coords, curved_edges = load_geojson_data("cos30019_2b.geojson")
     edge_distances = load_edge_distances("data/processed/edges.csv")
@@ -555,7 +645,7 @@ def main():
                         int(congestion_color[2] * 0.5 + COLOR_BG[2] * 0.5)
                     )
                 else:
-                    color = get_route_gradient_color(path_index + 0.5, len(current_path))
+                    color = congestion_color
                 
                 coords = curved_edges.get((node_id, neighbor_id))
                 if coords and osm_params:
@@ -629,8 +719,7 @@ def main():
                 radius = 11
                 pygame.draw.circle(screen, (255, 7, 58, 60), (px, py), radius + 8, 2)
             elif current_path and node_id in current_path:
-                idx = current_path.index(node_id)
-                color = get_route_gradient_color(idx, len(current_path))
+                color = COLOR_ACCENT
                 radius = 8
             else:
                 color = COLOR_NODE
@@ -742,9 +831,9 @@ def main():
                 pygame.draw.line(screen, (r, g, b), (bar_x + dx, bar_y), (bar_x + dx, bar_y + bar_h))
                 
             # Draw labels under the bar
-            lbl_start = font_small.render("Start", True, COLOR_SOURCE)
-            lbl_mid = font_small.render("Mid", True, (255, 215, 0))
-            lbl_end = font_small.render("End", True, COLOR_DEST)
+            lbl_start = font_small.render("Low Volume", True, COLOR_SOURCE)
+            lbl_mid = font_small.render("Moderate", True, (255, 215, 0))
+            lbl_end = font_small.render("High Volume", True, COLOR_DEST)
             screen.blit(lbl_start, (bar_x, bar_y + bar_h + 2))
             screen.blit(lbl_mid, (bar_x + bar_w // 2 - lbl_mid.get_width() // 2, bar_y + bar_h + 2))
             screen.blit(lbl_end, (bar_x + bar_w - lbl_end.get_width(), bar_y + bar_h + 2))
