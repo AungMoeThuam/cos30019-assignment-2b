@@ -1,0 +1,9 @@
+Model : LSTMRegressor
+Target: hourly_traffic_volume
+Features: scaled_volume, scaled_hour, scaled_dayofweek, scaled_isweekend, scaled_scats_number + movement_id_embedding(dim=8)
+Training Sequences: 37264
+Testing Sequences : 9512
+Cutoff Datetime: 2006-10-25 19:00:00
+MAE : 53.98
+RMSE: 70.20
+R2  : 0.9544

@@ -1,9 +1,0 @@
-Model : LSTMRegressor
-Target: hourly_traffic_volume
-Features: movement_id, scats_number, dayofweek, isweekend, hour
-Training Sequences: 37264
-Testing Sequences : 9512
-Cutoff Datetime: 2006-10-25 19:00:00
-MAE : 61.91
-RMSE: 89.97
-R2  : 0.9250
