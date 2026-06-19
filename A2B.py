@@ -7,6 +7,13 @@
 
 import sys
 import os
+import warnings
+try:
+    from sklearn.exceptions import InconsistentVersionWarning
+    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+except ImportError:
+    pass
+
 from src.models.registry import get_model
 from src.routing.graph import RoadNetworkGraph
 from src.routing.a_star import a_star_search
