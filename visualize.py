@@ -7,6 +7,13 @@
 import pygame
 import os
 import sys
+import warnings
+try:
+    from sklearn.exceptions import InconsistentVersionWarning
+    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+except ImportError:
+    pass
+
 import math
 import json
 import urllib.request
