@@ -1137,6 +1137,7 @@ def main():
         y_offset += int(w_h * 0.04)
         
         helps = [
+            "Double Click to select cards and input",
             "Click UPDATE ROUTE to calculate new paths.",
             "F / F11 key      : Toggle Full Screen Mode",
             "Node details save directly to map.txt"
