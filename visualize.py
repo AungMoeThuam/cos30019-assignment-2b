@@ -435,19 +435,95 @@ def main():
         except Exception as e:
             print(f"Error loading map background: {e}")
             
+    if 'time_str' not in locals() or time_str is None:
+        time_str = "1100"
+    if 'model_name' not in locals() or model_name is None:
+        model_name = "LSTM"
+
     current_start = start_node
     current_dest = dest_node
+    current_time = time_str
+    current_model = model_name
+    
+    input_start_str = str(current_start)
+    input_dest_str = str(current_dest)
+    input_time_str = current_time
+    
+    status_message = ""
+    status_color = COLOR_SOURCE
+    active_field = None
+    
     current_paths = []
     
     particles = []
     particle_timer = 0
     
     def update_route():
-        nonlocal current_paths, particles
+        nonlocal current_paths, particles, graph
+        from A2B import run_routing_and_prediction
+        # Run prediction dynamically with new parameters and save to map.txt
+        success = run_routing_and_prediction(current_start, current_dest, current_time, current_model, "map.txt")
+        if success:
+            # Reload graph weights from the updated map.txt
+            graph, _, _ = load_map_txt("map.txt")
+            
         from src.routing.a_star import yen_k_shortest_paths
         current_paths = yen_k_shortest_paths(graph, current_start, current_dest, k=3)
-        save_map_txt(graph, current_start, current_dest)
         particles = []
+        
+    def trigger_update():
+        nonlocal current_start, current_dest, current_time, current_model, status_message, status_color
+        
+        # 1. Validate Source Node
+        try:
+            val_start = int(input_start_str)
+            if val_start not in graph.nodes:
+                status_message = "Error: Source ID not found"
+                status_color = COLOR_DEST
+                return
+        except ValueError:
+            status_message = "Error: Source ID must be integer"
+            status_color = COLOR_DEST
+            return
+            
+        # 2. Validate Dest Node
+        try:
+            val_dest = int(input_dest_str)
+            if val_dest not in graph.nodes:
+                status_message = "Error: Dest ID not found"
+                status_color = COLOR_DEST
+                return
+        except ValueError:
+            status_message = "Error: Dest ID must be integer"
+            status_color = COLOR_DEST
+            return
+            
+        # 3. Validate Time format
+        if len(input_time_str) != 4 or not input_time_str.isdigit():
+            status_message = "Error: Time must be HHMM"
+            status_color = COLOR_DEST
+            return
+            
+        val_hour = int(input_time_str[:2])
+        val_min = int(input_time_str[2:])
+        if not (0 <= val_hour <= 23) or not (0 <= val_min <= 59):
+            status_message = "Error: Time ranges invalid"
+            status_color = COLOR_DEST
+            return
+            
+        # 4. Commit changes and run update
+        current_start = val_start
+        current_dest = val_dest
+        current_time = input_time_str
+        
+        status_message = "Updating routes..."
+        status_color = (255, 215, 0)
+        
+        # Re-run route prediction and paths
+        update_route()
+        
+        status_message = "Routes updated successfully!"
+        status_color = COLOR_SOURCE
         
     update_route()
     
@@ -518,6 +594,31 @@ def main():
         else:
             particles = []
             
+        # Calculate sidebar control rect positions
+        card_y = int(w_h * 0.03) + int(w_h * 0.07) # starts right after title height
+        y_start_node = card_y + 36
+        y_dest_node = card_y + 70
+        y_time = card_y + 104
+        y_model = card_y + 138
+        y_status = card_y + 172
+        
+        if status_message:
+            y_update = card_y + 192
+            card_h = 234
+        else:
+            y_update = card_y + 172
+            card_h = 214
+            
+        rect_input_start = pygame.Rect(map_w + 130, y_start_node, panel_w - 160, 26)
+        rect_input_dest = pygame.Rect(map_w + 130, y_dest_node, panel_w - 160, 26)
+        rect_input_time = pygame.Rect(map_w + 130, y_time, panel_w - 160, 26)
+        
+        rect_btn_lstm = pygame.Rect(map_w + 130, y_model, 50, 24)
+        rect_btn_gru = pygame.Rect(map_w + 185, y_model, 50, 24)
+        rect_btn_rf = pygame.Rect(map_w + 240, y_model, 50, 24)
+        
+        rect_btn_update = pygame.Rect(map_w + 25, y_update, panel_w - 50, 30)
+
         mouse_pos = pygame.mouse.get_pos()
         hovered_node = None
         hovered_edge = None
@@ -577,20 +678,67 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                if hovered_node is not None:
-                    if event.button == 1: # Left click
-                        current_start = hovered_node
-                        update_route()
-                    elif event.button == 3: # Right click
-                        current_dest = hovered_node
-                        update_route()
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_f or event.key == pygame.K_F11:
-                    is_fullscreen = not is_fullscreen
-                    if is_fullscreen:
-                        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+                if event.button == 1: # Left click
+                    mx, my = event.pos
+                    if mx >= map_w:
+                        # Sidebar controls clicks
+                        if rect_input_start.collidepoint(mx, my):
+                            active_field = "start"
+                        elif rect_input_dest.collidepoint(mx, my):
+                            active_field = "dest"
+                        elif rect_input_time.collidepoint(mx, my):
+                            active_field = "time"
+                        elif rect_btn_lstm.collidepoint(mx, my):
+                            current_model = "LSTM"
+                            active_field = None
+                        elif rect_btn_gru.collidepoint(mx, my):
+                            current_model = "GRU"
+                            active_field = None
+                        elif rect_btn_rf.collidepoint(mx, my):
+                            current_model = "RF"
+                            active_field = None
+                        elif rect_btn_update.collidepoint(mx, my):
+                            active_field = None
+                            trigger_update()
+                        else:
+                            active_field = None
                     else:
-                        screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE)
+                        active_field = None
+                else:
+                    active_field = None
+            elif event.type == pygame.KEYDOWN:
+                if active_field is not None:
+                    if event.key == pygame.K_BACKSPACE:
+                        if active_field == "start":
+                            input_start_str = input_start_str[:-1]
+                        elif active_field == "dest":
+                            input_dest_str = input_dest_str[:-1]
+                        elif active_field == "time":
+                            input_time_str = input_time_str[:-1]
+                    elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                        active_field = None
+                        trigger_update()
+                    elif event.key == pygame.K_ESCAPE:
+                        active_field = None
+                    else:
+                        char = event.unicode
+                        if char and char.isprintable():
+                            if active_field == "start":
+                                if len(input_start_str) < 8 and char.isdigit():
+                                    input_start_str += char
+                            elif active_field == "dest":
+                                if len(input_dest_str) < 8 and char.isdigit():
+                                    input_dest_str += char
+                            elif active_field == "time":
+                                if len(input_time_str) < 4 and char.isdigit():
+                                    input_time_str += char
+                else:
+                    if event.key == pygame.K_f or event.key == pygame.K_F11:
+                        is_fullscreen = not is_fullscreen
+                        if is_fullscreen:
+                            screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+                        else:
+                            screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE)
                         
         screen.fill(COLOR_BG)
         
@@ -775,22 +923,93 @@ def main():
         screen.blit(title_surf, (map_w + 20, y_offset))
         y_offset += int(w_h * 0.07)
         
-        # Source/Destination Card
-        card_rect = pygame.Rect(map_w + 15, y_offset, panel_w - 30, int(w_h * 0.16))
+        # Draw Route Settings Card background
+        card_rect = pygame.Rect(map_w + 15, y_offset, panel_w - 30, card_h)
         pygame.draw.rect(screen, COLOR_CARD_BG, card_rect, border_radius=8)
         pygame.draw.rect(screen, (60, 60, 75), card_rect, 1, border_radius=8)
         
-        lbl_s = font_body.render(f"Source ID : {current_start}", True, COLOR_SOURCE)
-        lbl_d = font_body.render(f"Dest ID   : {current_dest}", True, COLOR_DEST)
-        screen.blit(lbl_s, (map_w + 30, y_offset + 15))
-        screen.blit(lbl_d, (map_w + 30, y_offset + 15 + int(w_h * 0.04)))
+        # Header text
+        lbl_header = font_header.render("Route Settings", True, COLOR_ACCENT)
+        screen.blit(lbl_header, (map_w + 25, card_y + 10))
         
-        if current_start in visual_coords:
-            c_lat, c_lng = visual_coords[current_start]
-            lbl_coords = font_small.render(f"Lat: {c_lat:.5f}, Lng: {c_lng:.5f}", True, COLOR_TEXT_SECONDARY)
-            screen.blit(lbl_coords, (map_w + 30, y_offset + 15 + int(w_h * 0.08)))
+        # Row 1: Source ID
+        lbl_src_title = font_body.render("Source ID:", True, COLOR_TEXT_PRIMARY)
+        screen.blit(lbl_src_title, (map_w + 25, y_start_node + 3))
+        
+        box_src_color = COLOR_ACCENT if active_field == "start" else (80, 80, 95)
+        pygame.draw.rect(screen, (20, 20, 24), rect_input_start, border_radius=4)
+        pygame.draw.rect(screen, box_src_color, rect_input_start, 1, border_radius=4)
+        
+        # Draw text inside box
+        txt_src_surf = font_body.render(input_start_str, True, COLOR_TEXT_PRIMARY)
+        screen.blit(txt_src_surf, (rect_input_start.x + 8, rect_input_start.y + 3))
+        
+        # Draw cursor if active
+        if active_field == "start" and (pygame.time.get_ticks() // 400) % 2 == 0:
+            cursor_x = rect_input_start.x + 8 + font_body.size(input_start_str)[0]
+            pygame.draw.line(screen, COLOR_TEXT_PRIMARY, (cursor_x, rect_input_start.y + 4), (cursor_x, rect_input_start.y + 22), 2)
             
-        y_offset += int(w_h * 0.19)
+        # Row 2: Dest ID
+        lbl_dst_title = font_body.render("Dest ID:", True, COLOR_TEXT_PRIMARY)
+        screen.blit(lbl_dst_title, (map_w + 25, y_dest_node + 3))
+        
+        box_dst_color = COLOR_ACCENT if active_field == "dest" else (80, 80, 95)
+        pygame.draw.rect(screen, (20, 20, 24), rect_input_dest, border_radius=4)
+        pygame.draw.rect(screen, box_dst_color, rect_input_dest, 1, border_radius=4)
+        
+        txt_dst_surf = font_body.render(input_dest_str, True, COLOR_TEXT_PRIMARY)
+        screen.blit(txt_dst_surf, (rect_input_dest.x + 8, rect_input_dest.y + 3))
+        
+        if active_field == "dest" and (pygame.time.get_ticks() // 400) % 2 == 0:
+            cursor_x = rect_input_dest.x + 8 + font_body.size(input_dest_str)[0]
+            pygame.draw.line(screen, COLOR_TEXT_PRIMARY, (cursor_x, rect_input_dest.y + 4), (cursor_x, rect_input_dest.y + 22), 2)
+            
+        # Row 3: Time
+        lbl_time_title = font_body.render("Time:", True, COLOR_TEXT_PRIMARY)
+        screen.blit(lbl_time_title, (map_w + 25, y_time + 3))
+        
+        box_time_color = COLOR_ACCENT if active_field == "time" else (80, 80, 95)
+        pygame.draw.rect(screen, (20, 20, 24), rect_input_time, border_radius=4)
+        pygame.draw.rect(screen, box_time_color, rect_input_time, 1, border_radius=4)
+        
+        txt_time_surf = font_body.render(input_time_str, True, COLOR_TEXT_PRIMARY)
+        screen.blit(txt_time_surf, (rect_input_time.x + 8, rect_input_time.y + 3))
+        
+        if active_field == "time" and (pygame.time.get_ticks() // 400) % 2 == 0:
+            cursor_x = rect_input_time.x + 8 + font_body.size(input_time_str)[0]
+            pygame.draw.line(screen, COLOR_TEXT_PRIMARY, (cursor_x, rect_input_time.y + 4), (cursor_x, rect_input_time.y + 22), 2)
+            
+        # Row 4: Model Selector Buttons
+        lbl_model_title = font_body.render("Model:", True, COLOR_TEXT_PRIMARY)
+        screen.blit(lbl_model_title, (map_w + 25, y_model + 3))
+        
+        for m_name, btn_rect in [("LSTM", rect_btn_lstm), ("GRU", rect_btn_gru), ("RF", rect_btn_rf)]:
+            # Highlight selected
+            is_sel = (current_model == m_name or (m_name == "RF" and current_model in ["RANDOM", "RANDOM_FOREST"]))
+            btn_bg = COLOR_ACCENT if is_sel else (45, 45, 55)
+            btn_fg = (10, 10, 15) if is_sel else COLOR_TEXT_SECONDARY
+            
+            pygame.draw.rect(screen, btn_bg, btn_rect, border_radius=4)
+            pygame.draw.rect(screen, (80, 80, 95), btn_rect, 1, border_radius=4)
+            
+            lbl_btn = font_small.render(m_name, True, btn_fg)
+            screen.blit(lbl_btn, (btn_rect.x + (btn_rect.width - lbl_btn.get_width()) // 2, btn_rect.y + 4))
+            
+        # Row 5: Status Message (if any)
+        if status_message:
+            lbl_status = font_small.render(status_message, True, status_color)
+            screen.blit(lbl_status, (map_w + 25, y_status))
+            
+        # Row 6: UPDATE ROUTE Button
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        is_hovered = rect_btn_update.collidepoint(mouse_x, mouse_y)
+        up_btn_bg = (0, 204, 242) if is_hovered else (0, 180, 216)
+        
+        pygame.draw.rect(screen, up_btn_bg, rect_btn_update, border_radius=6)
+        lbl_update = font_body.render("UPDATE ROUTE", True, (255, 255, 255))
+        screen.blit(lbl_update, (rect_btn_update.x + (rect_btn_update.width - lbl_update.get_width()) // 2, rect_btn_update.y + 5))
+        
+        y_offset += card_h + 15
         
         # Route Statistics Card
         stats_header = font_header.render("Route Analytics", True, COLOR_ACCENT)
@@ -879,8 +1098,8 @@ def main():
         y_offset += int(w_h * 0.04)
         
         helps = [
-            "Left-Click node : Set Source",
-            "Right-Click node: Set Destination",
+            "Use Sidebar controls to change Route settings.",
+            "Click UPDATE ROUTE to calculate new paths.",
             "F / F11 key      : Toggle Full Screen Mode",
             "Node details save directly to map.txt"
         ]
