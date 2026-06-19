@@ -62,20 +62,45 @@ def run_routing_and_prediction(
               dest_node} not found in the road network.")
         return False
 
-    # 5. Run A* Search
-    path, travel_time = a_star_search(graph, origin_node, dest_node)
+    # 5. Run K-Shortest Paths Search
+    from src.routing.a_star import yen_k_shortest_paths
+    paths_data = yen_k_shortest_paths(graph, origin_node, dest_node, k=3)
+
+    # Helper function to format path with edge costs using en-dashes
+    def format_path_with_costs(g, path):
+        parts = []
+        for i in range(len(path) - 1):
+            u = path[i]
+            v = path[i + 1]
+            edge_cost = 0.0
+            for neighbor_id, cost in g.nodes[u].neighbors:
+                if neighbor_id == v:
+                    edge_cost = cost
+                    break
+            parts.append(f"{u} –({int(round(edge_cost))})- ")
+        parts.append(str(path[-1]))
+        return "".join(parts)
 
     # 6. Print Results
-    if path:
-        mins = int(travel_time // 60)
-        secs = int(travel_time % 60)
-        print(f"\nRouting from {origin_node} to {dest_node} succeeded!")
-        print(f"Fastest Route: {' -> '.join(map(str, path))}")
-        print(f"Estimated Travel Time: {mins} min {
-              secs} s ({travel_time:.2f} seconds)\n")
+    if paths_data:
+        # 1st path (Best path)
+        path1, cost1 = paths_data[0]
+        print(f"Best path: {format_path_with_costs(graph, path1)}")
+        print(f"Total Driving Time: {cost1 / 60.0:.1f} min")
+        
+        # 2nd path
+        if len(paths_data) > 1:
+            path2, cost2 = paths_data[1]
+            print(f"2nd path: {format_path_with_costs(graph, path2)}")
+            print(f"Total Driving Time: {cost2 / 60.0:.1f} min")
+            
+        # 3rd path
+        if len(paths_data) > 2:
+            path3, cost3 = paths_data[2]
+            print(f"3rd path: {format_path_with_costs(graph, path3)}")
+            print(f"Total Driving Time: {cost3 / 60.0:.1f} min")
     else:
-        print(f"\nRouting failed: No path exists between {
-              origin_node} and {dest_node}.\n")
+        print(f"\nRouting failed: No path exists between {origin_node} and {dest_node}.\n")
 
     # 7. Write map.txt (which will also be overwritten during interactions in the visualizer)
     try:

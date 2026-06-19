@@ -397,10 +397,10 @@ def main():
                 if not model_input:
                     model_name = "LSTM"
                     break
-                if model_input in ["LSTM", "GRU", "RANDOM"]:
+                if model_input in ["LSTM", "GRU", "RANDOM", "RF", "RANDOM_FOREST"]:
                     model_name = model_input
                     break
-                print("Invalid model selection. Choose from LSTM, GRU, RANDOM.")
+                print("Invalid model selection. Choose from LSTM, GRU, RANDOM, RF, RANDOM_FOREST.")
                 
             run_prediction = True
 
@@ -437,15 +437,15 @@ def main():
             
     current_start = start_node
     current_dest = dest_node
-    current_path = None
-    current_travel_time = 0.0
+    current_paths = []
     
     particles = []
     particle_timer = 0
     
     def update_route():
-        nonlocal current_path, current_travel_time, particles
-        current_path, current_travel_time = a_star_search(graph, current_start, current_dest)
+        nonlocal current_paths, particles
+        from src.routing.a_star import yen_k_shortest_paths
+        current_paths = yen_k_shortest_paths(graph, current_start, current_dest, k=3)
         save_map_txt(graph, current_start, current_dest)
         particles = []
         
@@ -497,7 +497,8 @@ def main():
             node_pixels = {nid: (int(x * scale_x), int(y * scale_y)) for nid, (x, y) in FALLBACK_PIXELS.items()}
             
         particle_timer += 1
-        if current_path and len(current_path) >= 2:
+        active_path = current_paths[0][0] if (current_paths and len(current_paths) > 0) else None
+        if active_path and len(active_path) >= 2:
             if particle_timer % 15 == 0:
                 particles.append({
                     "segment": 0,
@@ -511,7 +512,7 @@ def main():
                 if p["progress"] >= 1.0:
                     p["progress"] = 0.0
                     p["segment"] += 1
-                if p["segment"] < len(current_path) - 1:
+                if p["segment"] < len(active_path) - 1:
                     active_particles.append(p)
             particles = active_particles
         else:
@@ -613,15 +614,28 @@ def main():
                 if not p2: continue
                 
                 # Check path inclusion
-                is_in_path = False
-                path_index = -1
-                if current_path:
-                    for idx in range(len(current_path) - 1):
-                        if (current_path[idx] == node_id and current_path[idx+1] == neighbor_id) or \
-                           (current_path[idx] == neighbor_id and current_path[idx+1] == node_id):
-                            is_in_path = True
-                            path_index = idx
-                            break
+                is_in_active_path = False
+                is_in_faded_path = False
+                
+                if current_paths:
+                    active_path = current_paths[0][0] if len(current_paths) > 0 else None
+                    if active_path:
+                        for idx in range(len(active_path) - 1):
+                            if (active_path[idx] == node_id and active_path[idx+1] == neighbor_id) or \
+                               (active_path[idx] == neighbor_id and active_path[idx+1] == node_id):
+                                is_in_active_path = True
+                                break
+                    
+                    if not is_in_active_path:
+                        for path_data in current_paths[1:]:
+                            fpath = path_data[0]
+                            for idx in range(len(fpath) - 1):
+                                if (fpath[idx] == node_id and fpath[idx+1] == neighbor_id) or \
+                                   (fpath[idx] == neighbor_id and fpath[idx+1] == node_id):
+                                    is_in_faded_path = True
+                                    break
+                            if is_in_faded_path:
+                                break
                             
                 # Get the edge distance
                 dist = edge_distances.get((node_id, neighbor_id))
@@ -634,18 +648,24 @@ def main():
                 # Congestion color
                 congestion_color = get_congestion_color(cost, dist)
                 
-                # Render style: path is thick, background is thin
-                thickness = 7 if is_in_path else 3
-                
-                # Reduce opacity of background edges slightly by blending with BG color
-                if not is_in_path:
+                # Render style: active path is thick, faded path is medium, background is thin
+                if is_in_active_path:
+                    thickness = 7
+                    color = congestion_color
+                elif is_in_faded_path:
+                    thickness = 5
+                    color = (
+                        int(congestion_color[0] * 0.75 + COLOR_BG[0] * 0.25),
+                        int(congestion_color[1] * 0.75 + COLOR_BG[1] * 0.25),
+                        int(congestion_color[2] * 0.75 + COLOR_BG[2] * 0.25)
+                    )
+                else:
+                    thickness = 3
                     color = (
                         int(congestion_color[0] * 0.5 + COLOR_BG[0] * 0.5),
                         int(congestion_color[1] * 0.5 + COLOR_BG[1] * 0.5),
                         int(congestion_color[2] * 0.5 + COLOR_BG[2] * 0.5)
                     )
-                else:
-                    color = congestion_color
                 
                 coords = curved_edges.get((node_id, neighbor_id))
                 if coords and osm_params:
@@ -656,26 +676,27 @@ def main():
                         py = (yf - min_ytile) * 256
                         points.append((int(px * scale_x), int(py * scale_y)))
                     if len(points) >= 2:
-                        if is_in_path:
+                        if is_in_active_path:
                             # Draw soft glow matching congestion color behind active path
                             pygame.draw.lines(screen, (color[0], color[1], color[2]), False, points, thickness + 4)
                         pygame.draw.lines(screen, color, False, points, thickness)
                 else:
-                    if is_in_path:
+                    if is_in_active_path:
                         pygame.draw.line(screen, color, p1, p2, thickness + 4)
                     pygame.draw.line(screen, color, p1, p2, thickness)
                     
         # Draw Moving Traffic Particles
+        active_path = current_paths[0][0] if (current_paths and len(current_paths) > 0) else None
         for p in particles:
             seg_idx = p["segment"]
             progress = p["progress"]
             
             # Defensive bounds checking to prevent IndexError
-            if not current_path or seg_idx >= len(current_path) - 1:
+            if not active_path or seg_idx >= len(active_path) - 1:
                 continue
                 
-            u_id = current_path[seg_idx]
-            v_id = current_path[seg_idx+1]
+            u_id = active_path[seg_idx]
+            v_id = active_path[seg_idx+1]
             
             coords = curved_edges.get((u_id, v_id))
             if coords and osm_params:
@@ -718,7 +739,7 @@ def main():
                 color = COLOR_DEST
                 radius = 11
                 pygame.draw.circle(screen, (255, 7, 58, 60), (px, py), radius + 8, 2)
-            elif current_path and node_id in current_path:
+            elif current_paths and len(current_paths) > 0 and node_id in current_paths[0][0]:
                 color = COLOR_ACCENT
                 radius = 8
             else:
@@ -780,40 +801,49 @@ def main():
         pygame.draw.rect(screen, COLOR_CARD_BG, card_stats, border_radius=8)
         pygame.draw.rect(screen, (60, 60, 75), card_stats, 1, border_radius=8)
         
-        if current_path:
-            mins = int(current_travel_time // 60)
-            secs = int(current_travel_time % 60)
-            time_result = font_body.render(f"Est. Travel Time: {mins} min {secs} s", True, COLOR_SOURCE)
-            nodes_count = font_body.render(f"Intersections: {len(current_path)} nodes", True, COLOR_TEXT_PRIMARY)
-            
-            screen.blit(time_result, (map_w + 30, y_offset + 15))
-            screen.blit(nodes_count, (map_w + 30, y_offset + 15 + int(w_h * 0.04)))
-            
-            path_str = " -> ".join(map(str, current_path))
-            words = path_str.split(" -> ")
-            lines = []
-            curr_line = ""
-            for word in words:
-                test_line = curr_line + (" -> " if curr_line else "") + word
-                if font_small.size(test_line)[0] < panel_w - 60:
-                    curr_line = test_line
-                else:
+        if current_paths:
+            # Draw stats for all paths in current_paths
+            y_pos = y_offset + 10
+            for p_idx, path_data in enumerate(current_paths[:3]):
+                fpath, travel_time = path_data
+                mins = int(travel_time // 60)
+                secs = int(travel_time % 60)
+                
+                label_prefix = "Best Route" if p_idx == 0 else f"{p_idx+1}nd Route" if p_idx == 1 else f"{p_idx+1}rd Route"
+                text_color = COLOR_SOURCE if p_idx == 0 else COLOR_TEXT_PRIMARY
+                
+                time_result = font_small.render(f"{label_prefix}: {mins} min {secs} s ({len(fpath)} nodes)", True, text_color)
+                screen.blit(time_result, (map_w + 25, y_pos))
+                y_pos += int(w_h * 0.025)
+                
+                # Render the path nodes briefly on a new line
+                path_str = " -> ".join(map(str, fpath))
+                # Wrap if needed
+                words = path_str.split(" -> ")
+                curr_line = ""
+                lines = []
+                for w in words:
+                    test_line = curr_line + (" -> " if curr_line else "") + w
+                    if font_small.size(test_line)[0] < panel_w - 60:
+                        curr_line = test_line
+                    else:
+                        lines.append(curr_line)
+                        curr_line = w
+                if curr_line:
                     lines.append(curr_line)
-                    curr_line = word
-            if curr_line:
-                lines.append(curr_line)
+                    
+                for line in lines[:1]: # Show just 1 line of the node list to save space
+                    line_surf = font_small.render(line, True, COLOR_TEXT_SECONDARY)
+                    screen.blit(line_surf, (map_w + 25, y_pos))
+                    y_pos += int(w_h * 0.025)
                 
-            path_y = y_offset + 15 + int(w_h * 0.08)
-            for idx, line in enumerate(lines[:3]):
-                line_surf = font_small.render(line, True, COLOR_TEXT_SECONDARY)
-                screen.blit(line_surf, (map_w + 30, path_y))
-                path_y += int(w_h * 0.03)
+                y_pos += int(w_h * 0.015)
                 
-            # Draw Route Gradient Progress Bar Legend
-            bar_y = y_offset + int(w_h * 0.20)
+            # Draw Route Gradient Progress Bar Legend at the bottom of the card
+            bar_y = y_offset + int(w_h * 0.22)
             bar_x = map_w + 30
             bar_w = panel_w - 60
-            bar_h = 8
+            bar_h = 6
             
             # Draw gradient bar
             for dx in range(bar_w):

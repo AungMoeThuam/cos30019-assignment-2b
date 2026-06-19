@@ -58,7 +58,13 @@ class GRURegressorWrapper:
         )
 
         # Detect feature columns dynamically based on Keras model input layer shape
-        num_features = self.model.input_shape[-1]
+        try:
+            num_features = self.model.input_shape[-1]
+        except AttributeError:
+            try:
+                num_features = self.model.layers[0].weights[0].shape[0]
+            except Exception:
+                num_features = 3
         if num_features == 2:
             self.feature_cols = ["scaled_volume", "scaled_hour"]
         else:
