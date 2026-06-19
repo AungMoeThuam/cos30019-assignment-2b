@@ -11,7 +11,7 @@ from src.models.lstm_model_v1 import train_lstm
 class LSTMRegressorWrapper:
     def __init__(
         self,
-        model_path="models_saved/traffic_lstm_model.keras",
+        model_path="models_saved/lstm_model_v1.keras",
         metadata_path="models_saved/lstm_metadata_v1.joblib",
         data_path="data/processed/traffic_data.csv",
         edges_path="data/processed/edges.csv",
