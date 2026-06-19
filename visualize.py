@@ -451,6 +451,7 @@ def main():
     current_dest = dest_node
     current_time = time_str
     current_model = model_name
+    selected_route_index = 0
     
     input_start_str = str(current_start)
     input_dest_str = str(current_dest)
@@ -466,7 +467,8 @@ def main():
     particle_timer = 0
     
     def update_route():
-        nonlocal current_paths, particles, graph
+        nonlocal current_paths, particles, graph, selected_route_index
+        selected_route_index = 0
         from A2B import run_routing_and_prediction
         # Run prediction dynamically with new parameters and save to map.txt
         success = run_routing_and_prediction(current_start, current_dest, current_time, current_model, "map.txt")
@@ -580,7 +582,7 @@ def main():
             node_pixels = {nid: (int(x * scale_x), int(y * scale_y)) for nid, (x, y) in FALLBACK_PIXELS.items()}
             
         particle_timer += 1
-        active_path = current_paths[0][0] if (current_paths and len(current_paths) > 0) else None
+        active_path = current_paths[selected_route_index][0] if (current_paths and len(current_paths) > selected_route_index) else None
         if active_path and len(active_path) >= 2:
             if particle_timer % 15 == 0:
                 particles.append({
@@ -625,6 +627,15 @@ def main():
         rect_btn_rf = pygame.Rect(map_w + 240, y_model, 50, 24)
         
         rect_btn_update = pygame.Rect(map_w + 25, y_update, panel_w - 50, 30)
+
+        # Calculate Route Analytics rows clickable bounding boxes
+        stats_card_y = card_y + card_h + 15 + int(w_h * 0.04)
+        y_pos = stats_card_y + 10
+        row_h = int(w_h * 0.065)
+        rect_route_rows = []
+        for p_idx in range(min(3, len(current_paths))):
+            rect_route_rows.append(pygame.Rect(map_w + 20, y_pos, panel_w - 40, row_h))
+            y_pos += row_h + 8
 
         mouse_pos = pygame.mouse.get_pos()
         hovered_node = None
@@ -708,6 +719,12 @@ def main():
                             active_field = None
                             trigger_update()
                         else:
+                            # Check if one of the route rows was clicked
+                            for p_idx, r_rect in enumerate(rect_route_rows):
+                                if r_rect.collidepoint(mx, my):
+                                    selected_route_index = p_idx
+                                    particles = [] # Reset particles on change
+                                    break
                             active_field = None
                     else:
                         active_field = None
@@ -773,7 +790,7 @@ def main():
                 is_in_faded_path = False
                 
                 if current_paths:
-                    active_path = current_paths[0][0] if len(current_paths) > 0 else None
+                    active_path = current_paths[selected_route_index][0] if len(current_paths) > selected_route_index else None
                     if active_path:
                         for idx in range(len(active_path) - 1):
                             if (active_path[idx] == node_id and active_path[idx+1] == neighbor_id) or \
@@ -782,7 +799,9 @@ def main():
                                 break
                     
                     if not is_in_active_path:
-                        for path_data in current_paths[1:]:
+                        for p_idx, path_data in enumerate(current_paths):
+                            if p_idx == selected_route_index:
+                                continue
                             fpath = path_data[0]
                             for idx in range(len(fpath) - 1):
                                 if (fpath[idx] == node_id and fpath[idx+1] == neighbor_id) or \
@@ -894,7 +913,7 @@ def main():
                 color = COLOR_DEST
                 radius = 11
                 pygame.draw.circle(screen, (255, 7, 58, 60), (px, py), radius + 8, 2)
-            elif current_paths and len(current_paths) > 0 and node_id in current_paths[0][0]:
+            elif current_paths and len(current_paths) > selected_route_index and node_id in current_paths[selected_route_index][0]:
                 color = COLOR_ACCENT
                 radius = 8
             else:
@@ -1028,29 +1047,45 @@ def main():
         pygame.draw.rect(screen, (60, 60, 75), card_stats, 1, border_radius=8)
         
         if current_paths:
-            # Draw stats for all paths in current_paths
-            y_pos = y_offset + 10
+            # Draw stats for all paths in current_paths as interactive rows
             for p_idx, path_data in enumerate(current_paths[:3]):
                 fpath, travel_time = path_data
                 mins = int(travel_time // 60)
                 secs = int(travel_time % 60)
                 
-                label_prefix = "Best Route" if p_idx == 0 else f"{p_idx+1}nd Route" if p_idx == 1 else f"{p_idx+1}rd Route"
-                text_color = COLOR_SOURCE if p_idx == 0 else COLOR_TEXT_PRIMARY
+                # Check selection state
+                is_sel = (p_idx == selected_route_index)
                 
+                # Draw selection box
+                row_rect = rect_route_rows[p_idx]
+                if is_sel:
+                    pygame.draw.rect(screen, (50, 50, 65), row_rect, border_radius=6)
+                    pygame.draw.rect(screen, COLOR_ACCENT, row_rect, 1, border_radius=6)
+                else:
+                    pygame.draw.rect(screen, (40, 40, 48), row_rect, border_radius=6)
+                    pygame.draw.rect(screen, (70, 70, 85), row_rect, 1, border_radius=6)
+                    
+                label_prefix = "Best Route" if p_idx == 0 else f"{p_idx+1}nd Route" if p_idx == 1 else f"{p_idx+1}rd Route"
+                text_color = COLOR_ACCENT if is_sel else COLOR_SOURCE if p_idx == 0 else COLOR_TEXT_PRIMARY
+                
+                # Draw radio checkmark circle
+                radio_x = row_rect.x + 15
+                radio_y = row_rect.y + row_rect.height // 2
+                pygame.draw.circle(screen, (100, 100, 120), (radio_x, radio_y), 6, 1)
+                if is_sel:
+                    pygame.draw.circle(screen, COLOR_ACCENT, (radio_x, radio_y), 3)
+                    
                 time_result = font_small.render(f"{label_prefix}: {mins} min {secs} s ({len(fpath)} nodes)", True, text_color)
-                screen.blit(time_result, (map_w + 25, y_pos))
-                y_pos += int(w_h * 0.025)
+                screen.blit(time_result, (row_rect.x + 30, row_rect.y + 6))
                 
                 # Render the path nodes briefly on a new line
                 path_str = " -> ".join(map(str, fpath))
-                # Wrap if needed
                 words = path_str.split(" -> ")
                 curr_line = ""
                 lines = []
                 for w in words:
                     test_line = curr_line + (" -> " if curr_line else "") + w
-                    if font_small.size(test_line)[0] < panel_w - 60:
+                    if font_small.size(test_line)[0] < row_rect.width - 45:
                         curr_line = test_line
                     else:
                         lines.append(curr_line)
@@ -1058,15 +1093,12 @@ def main():
                 if curr_line:
                     lines.append(curr_line)
                     
-                for line in lines[:1]: # Show just 1 line of the node list to save space
-                    line_surf = font_small.render(line, True, COLOR_TEXT_SECONDARY)
-                    screen.blit(line_surf, (map_w + 25, y_pos))
-                    y_pos += int(w_h * 0.025)
-                
-                y_pos += int(w_h * 0.015)
+                if lines:
+                    line_surf = font_small.render(lines[0], True, COLOR_TEXT_SECONDARY)
+                    screen.blit(line_surf, (row_rect.x + 30, row_rect.y + 24))
                 
             # Draw Route Gradient Progress Bar Legend at the bottom of the card
-            bar_y = y_offset + int(w_h * 0.22)
+            bar_y = y_offset + int(w_h * 0.245)
             bar_x = map_w + 30
             bar_w = panel_w - 60
             bar_h = 6
@@ -1105,7 +1137,8 @@ def main():
         y_offset += int(w_h * 0.04)
         
         helps = [
-            "Use Sidebar controls to change Route settings.",
+            "Double-click input boxes & selectors to choose.",
+            "Double-click a route card to choose it.",
             "Click UPDATE ROUTE to calculate new paths.",
             "F / F11 key      : Toggle Full Screen Mode",
             "Node details save directly to map.txt"
