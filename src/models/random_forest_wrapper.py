@@ -3,7 +3,7 @@ import datetime
 import numpy as np
 import pandas as pd
 import joblib
-from src.models.train_random_forest import train_random_forest
+from src.models.random_forest_model_v1 import train_random_forest
 
 class RandomForestModelWrapper:
     def __init__(self, model_path="models_saved/random_forest_model.pkl", data_path="data/processed/traffic_data.csv", edges_path="data/processed/edges.csv"):
