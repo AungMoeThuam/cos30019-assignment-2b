@@ -16,77 +16,17 @@ import pandas as pd
 
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
-
-FEATURES = ["movement_id", "scats_number", "dayofweek", "isweekend", "hour"]
-TARGET = "hourly_traffic_volume"
-
-
-def hhmm_to_hour(time_hhmm: str | int) -> int:
-    """Convert HHMM input into hour (0-23)."""
-    time_text = str(time_hhmm).strip().zfill(4)
-
-    if len(time_text) != 4 or not time_text.isdigit():
-        raise ValueError("Time must be in HHMM format, for example 1100 or 0830.")
-
-    hour = int(time_text[:2])
-    minute = int(time_text[2:])
-
-    if hour < 0 or hour > 23:
-        raise ValueError("Hour must be between 00 and 23.")
-
-    if minute < 0 or minute > 59:
-        raise ValueError("Minute must be between 00 and 59.")
-
-    return hour
-
-
-def validate_dayofweek(dayofweek: int) -> int:
-    """Validate dayofweek index (Monday=0, Sunday=6)."""
-    dayofweek = int(dayofweek)
-
-    if dayofweek < 0 or dayofweek > 6:
-        raise ValueError("dayofweek must be 0 to 6. Monday=0, Sunday=6.")
-
-    return dayofweek
-
-
-def load_traffic_data(csv_path: str) -> pd.DataFrame:
-    """Load and clean processed traffic_data.csv."""
-    df = pd.read_csv(csv_path)
-
-    required_columns = [
-        "movement_id",
-        "scats_number",
-        "DateTime",
-        "dayofweek",
-        "isweekend",
-        "hourly_traffic_volume",
-    ]
-
-    missing = [col for col in required_columns if col not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns in traffic data: {missing}")
-
-    df["DateTime"] = pd.to_datetime(df["DateTime"], dayfirst=True, errors="coerce")
-    df = df.dropna(subset=["DateTime"])
-
-    df["movement_id"] = df["movement_id"].astype(str)
-    df["scats_number"] = df["scats_number"].astype(int)
-    df["dayofweek"] = df["dayofweek"].astype(int)
-    df["isweekend"] = df["isweekend"].astype(int)
-    df[TARGET] = df[TARGET].astype(float)
-
-    # Extract hour from DateTime.
-    df["hour"] = df["DateTime"].dt.hour.astype(int)
-
-    # Keep records in chronological order
-    df = df.sort_values(["DateTime", "movement_id"]).reset_index(drop=True)
-
-    return df
+from src.models.model_utils import (
+    FEATURES,
+    TARGET,
+    hhmm_to_hour,
+    validate_dayofweek,
+    load_traffic_data,
+    evaluate_model,
+)
 
 
 def build_random_forest_pipeline() -> Pipeline:
@@ -132,19 +72,6 @@ def time_based_train_test_split(df: pd.DataFrame, train_ratio: float = 0.8):
     test_df = df[df["DateTime"] >= cutoff].copy()
 
     return train_df, test_df, cutoff
-
-
-def evaluate_model(y_true, y_pred) -> Dict[str, float]:
-    """Calculate MAE, RMSE, and R2."""
-    mae = mean_absolute_error(y_true, y_pred)
-    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
-    r2 = r2_score(y_true, y_pred)
-
-    return {
-        "MAE": float(mae),
-        "RMSE": float(rmse),
-        "R2": float(r2),
-    }
 
 
 def train_random_forest(
@@ -237,11 +164,11 @@ def predict_for_edges(
         raise ValueError(f"Missing required columns in edges data: {missing}")
 
     hour = hhmm_to_hour(time_hhmm)
-    
+
     # Option A: Default to today's weekday index if not specified
     if dayofweek is None:
         dayofweek = datetime.datetime.now().weekday()
-        
+
     dayofweek = validate_dayofweek(dayofweek)
     isweekend = 1 if dayofweek in [5, 6] else 0
 
