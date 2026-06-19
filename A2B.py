@@ -12,6 +12,96 @@ from src.routing.graph import RoadNetworkGraph
 from src.routing.a_star import a_star_search
 
 
+def run_routing_and_prediction(
+    origin_node: int,
+    dest_node: int,
+    time_str: str,
+    model_name: str,
+    map_file_path: str = "map.txt",
+) -> bool:
+    # Validate model selection via registry
+    try:
+        model_class = get_model(model_name)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return False
+
+    # Paths to CSV data
+    lookup_path = "data/processed/movement_lookup.csv"
+    edges_path = "data/processed/edges.csv"
+
+    if not os.path.exists(lookup_path) or not os.path.exists(edges_path):
+        print(f"Error: Data files not found. Ensure '{
+              lookup_path}' and '{edges_path}' exist.")
+        return False
+
+    # 3. Load Model (Dependency Injection)
+    try:
+        model_instance = model_class()
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        return False
+
+    hour = int(time_str[:2])
+    minute = int(time_str[2:])
+    print(f"Welcome to TBRGS (Traffic-Based Route Guidance System)!")
+    print(f"Loading road network graph and predicting traffic flows using {
+          model_name} for departure time {hour:02d}:{minute:02d}...")
+
+    # 4. Build Map Graph
+    graph = RoadNetworkGraph()
+    graph.load_from_csv(lookup_path, edges_path, model_instance, time_str)
+
+    # Verify origin/destination node exist in graph
+    if origin_node not in graph.nodes:
+        print(f"Error: Origin node {
+              origin_node} not found in the road network.")
+        return False
+    if dest_node not in graph.nodes:
+        print(f"Error: Destination node {
+              dest_node} not found in the road network.")
+        return False
+
+    # 5. Run A* Search
+    path, travel_time = a_star_search(graph, origin_node, dest_node)
+
+    # 6. Print Results
+    if path:
+        mins = int(travel_time // 60)
+        secs = int(travel_time % 60)
+        print(f"\nRouting from {origin_node} to {dest_node} succeeded!")
+        print(f"Fastest Route: {' -> '.join(map(str, path))}")
+        print(f"Estimated Travel Time: {mins} min {
+              secs} s ({travel_time:.2f} seconds)\n")
+    else:
+        print(f"\nRouting failed: No path exists between {
+              origin_node} and {dest_node}.\n")
+
+    # 7. Write map.txt (which will also be overwritten during interactions in the visualizer)
+    try:
+        with open(map_file_path, "w") as f:
+            f.write(f"{origin_node}\n")
+            f.write(f"{dest_node}\n")
+            # Write all nodes sorted by ID
+            for node_id in sorted(graph.nodes.keys()):
+                node = graph.nodes[node_id]
+                f.write(f"{node.id}:({node.lat:.6f},{node.lng:.6f})\n")
+
+            # Write all unique edges sorted by u then v
+            edges_written = set()
+            for u in sorted(graph.nodes.keys()):
+                node = graph.nodes[u]
+                for v, cost in sorted(node.neighbors, key=lambda x: x[0]):
+                    edge_key = (u, v)
+                    edges_written.add(edge_key)
+                    f.write(f"{u},{v},{int(round(cost))}\n")
+        print(f"Generated '{map_file_path}' successfully.")
+        return True
+    except Exception as e:
+        print(f"Warning: Failed to write {map_file_path}: {e}")
+        return False
+
+
 def main():
     # 1. Parse command-line arguments
     if len(sys.argv) < 5:
@@ -46,78 +136,9 @@ def main():
         print("Error: Invalid time. Hour must be 00-23 and Minute must be 00-59.")
         sys.exit(1)
 
-    # Validate model selection via registry
-    try:
-        model_class = get_model(model_name)
-    except ValueError as e:
-        print(f"Error: {e}")
+    success = run_routing_and_prediction(origin_node, dest_node, time_str, model_name)
+    if not success:
         sys.exit(1)
-
-    # Paths to CSV data
-    lookup_path = "data/processed/movement_lookup.csv"
-    edges_path = "data/processed/edges.csv"
-
-    if not os.path.exists(lookup_path) or not os.path.exists(edges_path):
-        print(f"Error: Data files not found. Ensure '{
-              lookup_path}' and '{edges_path}' exist.")
-        sys.exit(1)
-
-    # 3. Load Model (Dependency Injection)
-    model_instance = model_class()
-    print(f"Welcome to TBRGS (Traffic-Based Route Guidance System)!")
-    print(f"Loading road network graph and predicting traffic flows using {
-          model_name} for departure time {hour:02d}:{minute:02d}...")
-
-    # 4. Build Map Graph
-    graph = RoadNetworkGraph()
-    graph.load_from_csv(lookup_path, edges_path, model_instance, time_str)
-
-    # Verify origin/destination node exist in graph
-    if origin_node not in graph.nodes:
-        print(f"Error: Origin node {
-              origin_node} not found in the road network.")
-        sys.exit(1)
-    if dest_node not in graph.nodes:
-        print(f"Error: Destination node {
-              dest_node} not found in the road network.")
-        sys.exit(1)
-
-    # 5. Run A* Search
-    path, travel_time = a_star_search(graph, origin_node, dest_node)
-
-    # 6. Print Results
-    if path:
-        mins = int(travel_time // 60)
-        secs = int(travel_time % 60)
-        print(f"\nRouting from {origin_node} to {dest_node} succeeded!")
-        print(f"Fastest Route: {' -> '.join(map(str, path))}")
-        print(f"Estimated Travel Time: {mins} min {
-              secs} s ({travel_time:.2f} seconds)\n")
-    else:
-        print(f"\nRouting failed: No path exists between {
-              origin_node} and {dest_node}.\n")
-
-    # 7. Write map.txt (which will also be overwritten during interactions in the visualizer)
-    try:
-        with open("map.txt", "w") as f:
-            f.write(f"{origin_node}\n")
-            f.write(f"{dest_node}\n")
-            # Write all nodes sorted by ID
-            for node_id in sorted(graph.nodes.keys()):
-                node = graph.nodes[node_id]
-                f.write(f"{node.id}:({node.lat:.6f},{node.lng:.6f})\n")
-
-            # Write all unique edges sorted by u then v
-            edges_written = set()
-            for u in sorted(graph.nodes.keys()):
-                node = graph.nodes[u]
-                for v, cost in sorted(node.neighbors, key=lambda x: x[0]):
-                    edge_key = (u, v)
-                    edges_written.add(edge_key)
-                    f.write(f"{u},{v},{int(round(cost))}\n")
-        print("Generated 'map.txt' successfully.")
-    except Exception as e:
-        print(f"Warning: Failed to write map.txt: {e}")
 
 
 if __name__ == "__main__":

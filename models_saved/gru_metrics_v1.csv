@@ -1,0 +1,9 @@
+Model : GRURegressor
+Target: hourly_traffic_volume
+Features: movement_id, scats_number, dayofweek, isweekend, hour
+Training Sequences: 37776
+Testing Sequences : 9512
+Cutoff Datetime: 2006-10-25 19:00:00
+MAE : 70.42
+RMSE: 104.48
+R2  : 0.8989
