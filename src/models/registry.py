@@ -9,6 +9,8 @@ MODEL_REGISTRY = {
     "LSTM": LSTMRegressorWrapper,
     "GRU": GRURegressorWrapper,
     "RANDOM": RandomForestModelWrapper,
+    "RF": RandomForestModelWrapper,
+    "RANDOM_FOREST": RandomForestModelWrapper,
 }
 
 def get_model(name: str):
